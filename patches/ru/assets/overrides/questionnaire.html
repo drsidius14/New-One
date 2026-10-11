@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Анкета</title>
+    <style>
+        .title {
+        text-align: center;
+        }
+    </style>
+</head>
+<body>
+<h1 class="title">Содержимое анкеты скоро появится</h1>
+<!-- Содержимое анкеты -->
+<form id="questionnaireForm">
+
+    <!-- Кнопка подтверждения -->
+<!--    <button type="button" id="confirmButton" onclick="gotoActivity('a')">Отправить</button>-->
+</form>
+
+<script type="text/javascript">
+<!--    function gotoActivity (activity) {-->
+<!--    nativeMethod.toActivity(activity); // вызов метода со стороны H5 -->
+<!--}-->
+    // Управление состоянием кнопки подтверждения
+    function updateConfirmButton() {
+        var confirmButton = document.getElementById('confirmButton');
+        var form = document.getElementById('questionnaireForm');
+        var isCompleted = form.checkValidity(); // проверка заполнения формы
+        confirmButton.disabled = !isCompleted; // блокировка кнопки до заполнения
+    }
+
+    // Обновление состояния кнопки после загрузки страницы
+    window.onload = function() {
+        updateConfirmButton();
+    };
+
+    // Обновление состояния при изменении введённых данных
+    document.addEventListener('input', function() {
+        updateConfirmButton();
+    });
+
+    // Обработчик нажатия кнопки подтверждения
+    function confirm() {
+        if (document.getElementById('questionnaireForm').checkValidity()) {
+            // Передача заполненных данных в Android
+            var data = {
+                question1: document.getElementById('question1').value,
+                question2: document.getElementById('question2').value,
+                // Ответы на остальные вопросы
+            };
+            // Передача данных через интерфейс приложения
+            AndroidInterface.saveData(JSON.stringify(data));
+        }
+    }
+</script>
+</body>
+</html>

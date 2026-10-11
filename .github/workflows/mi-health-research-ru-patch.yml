@@ -1,0 +1,120 @@
+name: Mi Health Research 1.4.6 — Russian patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'config/**'
+      - 'app/base/**'
+      - 'patches/ru/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/mi-health-research-ru-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  patch-and-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v7
+
+      - name: Set up Java for Apktool
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify that the exact supplied APK is the only base
+        run: python3 scripts/verify_source.py --project-root .
+
+      - name: Run unit tests and check patch files
+        run: |
+          python3 -m unittest discover -s tests -v
+          python3 scripts/validate_patch.py --project-root .
+
+      - name: Install pinned Apktool 3.0.3
+        run: |
+          mkdir -p .tools
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar' \
+            --output .tools/apktool.jar
+          echo 'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  .tools/apktool.jar' | sha256sum --check -
+          java -jar .tools/apktool.jar --version
+
+      - name: Decode exact base APK
+        run: |
+          mkdir -p work
+          java -jar .tools/apktool.jar d -f \
+            'app/base/小米健康研究_1.4.6.apk' \
+            -o work/decoded
+
+      - name: Extract translation catalogs
+        run: |
+          python3 scripts/extract_catalog.py --decoded-dir work/decoded --out-dir work/catalog
+          python3 scripts/validate_patch.py --project-root . --decoded-dir work/decoded
+
+      - name: Apply Russian patches
+        id: patch
+        run: python3 scripts/apply_patch.py --project-root . --decoded-dir work/decoded
+
+      - name: Install Android signing/verification tools
+        if: steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0'
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android build tools
+        if: steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0'
+        run: |
+          sdkmanager --install 'platform-tools' 'build-tools;36.0.0'
+          yes | sdkmanager --licenses >/dev/null
+          echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
+
+      - name: Build, align and sign patched APK
+        if: steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0'
+        env:
+          DECODED: work/decoded
+        run: |
+          mkdir -p work/release
+          java -jar .tools/apktool.jar b "$DECODED" -o work/release/MiHealthResearch-1.4.6-unsigned.apk
+          zipalign -f -v 4 work/release/MiHealthResearch-1.4.6-unsigned.apk work/release/MiHealthResearch-1.4.6-aligned.apk
+          PASS="$(openssl rand -hex 16)"
+          keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/mi-health-ci.jks" \
+            -storepass "$PASS" -keypass "$PASS" -alias ci-test-key -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname 'CN=Mi Health Research Russian Patch CI,O=Local Test Build'
+          apksigner sign --ks "$RUNNER_TEMP/mi-health-ci.jks" --ks-key-alias ci-test-key \
+            --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
+            --out work/release/MiHealthResearch-1.4.6-ru-patched.apk \
+            work/release/MiHealthResearch-1.4.6-aligned.apk
+          apksigner verify --verbose --print-certs work/release/MiHealthResearch-1.4.6-ru-patched.apk
+          sha256sum 'app/base/小米健康研究_1.4.6.apk' | tee work/release/base-apk-sha256.txt
+          rm -f "$RUNNER_TEMP/mi-health-ci.jks"
+
+      - name: Upload resource catalog and audit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mi-health-research-1.4.6-ru-catalog
+          path: |
+            work/catalog/**
+            work/decoded/apktool.yml
+            work/release/base-apk-sha256.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload patched APK when a patch exists
+        if: (steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0') && success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mi-health-research-1.4.6-ru-patched-apk
+          path: work/release/MiHealthResearch-1.4.6-ru-patched.apk
+          if-no-files-found: error
+          retention-days: 14

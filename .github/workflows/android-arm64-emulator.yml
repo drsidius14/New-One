@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p diagnostics
-          for f in emulator.log emulator-abi.txt emulator-properties.txt host-dependencies.txt; do : > "diagnostics/$f"; done
+          for f in emulator.log emulator-abi.txt emulator-properties.txt host-dependencies.txt kvm-status.txt; do : > "diagnostics/$f"; done
           {
             echo "runner_os=$RUNNER_OS"
             echo "runner_arch=$RUNNER_ARCH"
@@ -130,7 +130,34 @@ jobs:
             cat diagnostics/avd-create.log >&2 || true
             exit 1
           fi
-          "$EMULATOR" -avd ci_x86_64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > diagnostics/emulator.log 2>&1 &
+          # Diagnose KVM before launching: software-only x86_64 emulation on a
+          # hosted runner can take many minutes and may never finish booting.
+          {
+            echo "user=$(id -un)"
+            echo "groups=$(id -Gn)"
+            if [ -e /dev/kvm ]; then
+              ls -l /dev/kvm
+              stat /dev/kvm || true
+              getent group kvm || true
+            else
+              echo "/dev/kvm is absent"
+            fi
+          } > diagnostics/kvm-status.txt 2>&1
+          if [ ! -e /dev/kvm ]; then
+            echo "KVM device /dev/kvm is unavailable; refusing a slow software-only boot." | tee -a diagnostics/kvm-status.txt >&2
+            exit 1
+          fi
+          # GitHub-hosted Ubuntu runners may expose /dev/kvm without granting
+          # the runner user access. Change only the device permissions for this
+          # ephemeral job; do not modify the repository or host configuration.
+          sudo chmod 666 /dev/kvm 2>> diagnostics/kvm-status.txt || true
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            echo "KVM exists but remains inaccessible after the permission adjustment." | tee -a diagnostics/kvm-status.txt >&2
+            ls -l /dev/kvm >> diagnostics/kvm-status.txt 2>&1 || true
+            exit 1
+          fi
+          echo "kvm_access=read-write" | tee -a diagnostics/kvm-status.txt
+          "$EMULATOR" -avd ci_x86_64 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > diagnostics/emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "$EMULATOR_PID" > diagnostics/emulator.pid
           "$ADB" start-server 2>&1 | tee diagnostics/adb-start.log

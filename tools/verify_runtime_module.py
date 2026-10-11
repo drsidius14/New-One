@@ -70,4 +70,25 @@ with zipfile.ZipFile(BASE_APK) as apk:
     libs = sorted(n for n in names if n.endswith(".so"))
     assert len(libs) == 26, f"Unexpected native library inventory: {len(libs)}"
 
+# V3 readability and format-contract checks; strings only, never integration code.
+assert len(resource_keys) >= 520, f"Expected expanded translation coverage (>=520 keys), got {len(resource_keys)}"
+assert 'RESOURCE_TRANSLATIONS.put("health_join_now", "Вступить");' in text
+assert 'DYNAMIC_TEXT_TRANSLATIONS.put("立即加入", "Вступить");' in text
+def _java_value(resource_key):
+    match = re.search(r'RESOURCE_TRANSLATIONS\.put\("' + re.escape(resource_key) + r'",\s*("(?:\\.|[^"\\])*")\);', text)
+    assert match, f"Missing translated resource: {resource_key}"
+    return __import__("json").loads(match.group(1))
+def _fmt_tokens(value):
+    return sorted(re.findall(r"%\d+\$[sd]|%[sd]", value))
+for _key, _tokens in {
+    "onboarding_privacy_tips_xieyi": ["%1$s"],
+    "onboarding_privacy_tips_yinsi": ["%1$s"],
+    "onboarding_privacy_tips_zhaiyao": ["%1$s"],
+    "onboarding_privacy_tips_2": ["%1$s", "%2$s", "%3$s"],
+    "onboarding_read_and_agree_privacy": ["%1$s"],
+}.items():
+    assert _fmt_tokens(_java_value(_key)) == sorted(_tokens), f"Formatting placeholders changed for {_key}"
+assert 'WebView' not in text and 'loadUrl' not in text and 'startActivity(' not in text
+assert 'bindService(' not in text and 'IBinder' not in text and 'PackageManager' not in text
+
 print(f"Source checks passed: {len(resource_keys)} resource replacements; TextView-only hooks; no WebView/Intent/Binder/service hooks; original APK SHA-256 pinned; {len(libs)} native libraries present.")

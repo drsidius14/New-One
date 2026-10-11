@@ -1,0 +1,29 @@
+name: Validate repository
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Python syntax
+        run: python -m py_compile scripts/check-resources.py
+      - name: Validate fixture XML
+        run: python scripts/check-resources.py tests/fixtures/strings.xml
+      - name: Shell syntax
+        run: bash -n scripts/install-tools.sh scripts/analyze-apk.sh scripts/termux-bootstrap.sh
+      - name: Required files
+        run: |
+          test -s README.md
+          test -s docs/WORKFLOW.md
+          test -s docs/SECURITY.md

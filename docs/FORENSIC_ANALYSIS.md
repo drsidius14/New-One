@@ -44,6 +44,6 @@ Do not rebuild or replace the Xiaomi APK. A valid modified APK requires signing,
 - Module scope is restricted to `com.mi.healthresearch`.
 - Static resource replacements match resource names present in the catalog.
 - Four dynamic strings match the supplied screenshot text exactly after whitespace normalization.
-- Only the identified Xiaomi WebView URL locale parameters are rewritten.
+- No WebView URLs, Intent handoffs, Binder calls, services, PackageManager, or synchronization methods are modified by the current runtime module. Remote legal content therefore remains server-controlled and may remain Chinese.
 - Remote legal-document content is not fabricated or silently replaced with an incomplete translation.
 - User must verify Russian output and Xiaomi handoffs on the phone; CI compilation alone is insufficient.

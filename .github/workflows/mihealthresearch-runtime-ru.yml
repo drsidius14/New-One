@@ -8,6 +8,7 @@ on:
       - 'tools/verify_runtime_module.py'
       - '.github/workflows/mihealthresearch-runtime-ru.yml'
       - 'docs/FORENSIC_ANALYSIS.md'
+      - 'docs/MI_FITNESS_INTEGRATION_AUDIT_RU.md'
   workflow_dispatch:
 
 permissions:

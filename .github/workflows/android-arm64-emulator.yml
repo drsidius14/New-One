@@ -52,14 +52,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          # Ubuntu package naming differs across releases/mirror metadata. Select an
-          # actually available package providing the PulseAudio runtime library.
           if apt-cache show libpulse0t64 >/dev/null 2>&1; then
             PULSE_PACKAGE=libpulse0t64
           elif apt-cache show libpulse0 >/dev/null 2>&1; then
             PULSE_PACKAGE=libpulse0
           else
-            echo 'Neither libpulse0t64 nor libpulse0 is available from configured apt repositories.' >&2
+            echo 'No PulseAudio runtime package found in configured apt repositories.' >&2
             apt-cache search '^libpulse0' | tee diagnostics/pulse-package-search.txt >&2 || true
             exit 1
           fi
@@ -94,11 +92,15 @@ jobs:
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/emulator/emulator"
           test -d "$ANDROID_HOME/system-images/android-$API_LEVEL/google_apis/arm64-v8a"
+          # QEMU ships with private Android Emulator libraries. Set the SDK's
+          # runtime search paths before using ldd; a bare ldd reports false
+          # "not found" errors for these SDK-bundled libraries.
+          export LD_LIBRARY_PATH="$ANDROID_HOME/emulator/lib64:$ANDROID_HOME/emulator/lib64/qt/lib:$ANDROID_HOME/emulator/lib64/qt/plugins${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           QEMU="$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64"
           if [ -x "$QEMU" ]; then
             ldd "$QEMU" | tee diagnostics/host-dependencies.txt
             if grep -q 'not found' diagnostics/host-dependencies.txt; then
-              echo 'QEMU has unresolved shared-library dependencies.' >&2
+              echo 'QEMU has unresolved shared-library dependencies even with Android SDK library paths.' >&2
               exit 1
             fi
           else

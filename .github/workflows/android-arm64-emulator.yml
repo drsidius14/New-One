@@ -1,4 +1,4 @@
-name: ARM64 Android emulator smoke test
+name: x86_64 Android emulator smoke test
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       api_level:
-        description: Android API level with a published ARM64 Google APIs image
+        description: Android API level with a published x86_64 Google APIs image
         required: true
         default: "36"
       boot_timeout:
@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 jobs:
-  arm64-emulator:
+  x86_64-emulator:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -76,7 +76,7 @@ jobs:
       - name: Accept Android SDK licenses
         run: python3 scripts/accept_android_licenses.py
 
-      - name: Install SDK and ARM64 image
+      - name: Install SDK and x86_64 image
         shell: bash
         run: |
           set -euo pipefail
@@ -85,13 +85,13 @@ jobs:
             "platforms;android-$API_LEVEL" \
             "build-tools;36.0.0" \
             "emulator" \
-            "system-images;android-$API_LEVEL;google_apis;arm64-v8a"
+            "system-images;android-$API_LEVEL;google_apis;x86_64"
           echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/emulator/emulator"
-          test -d "$ANDROID_HOME/system-images/android-$API_LEVEL/google_apis/arm64-v8a"
+          test -d "$ANDROID_HOME/system-images/android-$API_LEVEL/google_apis/x86_64"
           # QEMU ships with private Android Emulator libraries. Set the SDK's
           # runtime search paths before using ldd; a bare ldd reports false
           # "not found" errors for these SDK-bundled libraries.
@@ -110,7 +110,7 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -version 2>&1 | tee diagnostics/emulator-version.txt
           "$ANDROID_HOME/platform-tools/adb" version 2>&1 | tee diagnostics/adb-version.txt
 
-      - name: Create and boot ARM64 emulator
+      - name: Create and boot x86_64 emulator
         shell: bash
         run: |
           set -uo pipefail
@@ -120,17 +120,17 @@ jobs:
           # Use the same explicit AVD directory for creation and launch.
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           mkdir -p "$ANDROID_AVD_HOME"
-          if ! printf 'no\n' | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2 2>&1 | tee diagnostics/avd-create.log; then
+          if ! printf 'no\n' | "$AVDMANAGER" create avd --force --name ci_x86_64 --package "system-images;android-$API_LEVEL;google_apis;x86_64" --device pixel_2 2>&1 | tee diagnostics/avd-create.log; then
             echo 'AVD creation command failed.' >&2
             exit 1
           fi
-          if [ ! -s "$ANDROID_AVD_HOME/ci_arm64.ini" ] || [ ! -d "$ANDROID_AVD_HOME/ci_arm64.avd" ]; then
+          if [ ! -s "$ANDROID_AVD_HOME/ci_x86_64.ini" ] || [ ! -d "$ANDROID_AVD_HOME/ci_x86_64.avd" ]; then
             echo "AVD creation did not produce expected files under $ANDROID_AVD_HOME." | tee diagnostics/avd-create-result.txt >&2
-            find "$HOME/.android" -maxdepth 4 \( -type f -name 'ci_arm64.ini' -o -type d -name 'ci_arm64.avd' \) -print 2>&1 | tee diagnostics/avd-locations.txt >&2 || true
+            find "$HOME/.android" -maxdepth 4 \( -type f -name 'ci_x86_64.ini' -o -type d -name 'ci_x86_64.avd' \) -print 2>&1 | tee diagnostics/avd-locations.txt >&2 || true
             cat diagnostics/avd-create.log >&2 || true
             exit 1
           fi
-          "$EMULATOR" -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > diagnostics/emulator.log 2>&1 &
+          "$EMULATOR" -avd ci_x86_64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > diagnostics/emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "$EMULATOR_PID" > diagnostics/emulator.pid
           "$ADB" start-server 2>&1 | tee diagnostics/adb-start.log
@@ -145,14 +145,14 @@ jobs:
             sleep 5
           done
           if [ "$booted" -ne 1 ]; then
-            echo 'ARM64 emulator failed to boot on this runner.' | tee diagnostics/boot-result.txt >&2
+            echo 'x86_64 emulator failed to boot on this runner.' | tee diagnostics/boot-result.txt >&2
             "$ADB" devices -l > diagnostics/adb-devices.txt 2>&1 || true
             cat diagnostics/emulator.log || true
             exit 1
           fi
           echo 'boot_completed=1' | tee diagnostics/boot-result.txt
           "$ADB" shell getprop ro.product.cpu.abi | tee diagnostics/emulator-abi.txt
-          grep -q 'arm64-v8a' diagnostics/emulator-abi.txt
+          grep -q 'x86_64' diagnostics/emulator-abi.txt
           "$ADB" shell getprop ro.build.version.sdk | tee diagnostics/emulator-sdk.txt
           "$ADB" shell getprop > diagnostics/emulator-properties.txt
           "$ADB" devices -l > diagnostics/adb-devices.txt
@@ -161,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: arm64-emulator-diagnostics
+          name: x86_64-emulator-diagnostics
           path: diagnostics/
           if-no-files-found: error
           retention-days: 14

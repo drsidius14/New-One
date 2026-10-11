@@ -52,30 +52,41 @@ jobs:
             "build-tools;36.0.0" \
             "emulator" \
             "system-images;android-$API_LEVEL;google_apis;arm64-v8a"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/emulator/emulator"
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print
           test -d "$ANDROID_HOME/system-images/android-$API_LEVEL/google_apis/arm64-v8a"
 
       - name: Create and boot ARM64 emulator
+        shell: bash
         run: |
-          echo "no" | avdmanager create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2
-          emulator -version
-          (emulator -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > emulator.log 2>&1 &)
-          adb start-server
+          set -o pipefail
+          AVDMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f | sort | tail -n 1)"
+          EMULATOR="$ANDROID_HOME/emulator/emulator"
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          test -x "$AVDMANAGER"
+          test -x "$EMULATOR"
+          echo "no" | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2
+          "$EMULATOR" -version
+          ("$EMULATOR" -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > emulator.log 2>&1 &)
+          "$ADB" start-server
           deadline=$((SECONDS + BOOT_TIMEOUT))
           booted=0
           while [ "$SECONDS" -lt "$deadline" ]; do
-            if adb shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; then booted=1; break; fi
+            if "$ADB" shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; then booted=1; break; fi
             sleep 5
           done
           if [ "$booted" -ne 1 ]; then
-            cat emulator.log
+            cat emulator.log || true
             echo "ARM64 emulator failed to boot on this runner." >&2
             exit 1
           fi
-          adb shell getprop ro.product.cpu.abi | tee emulator-abi.txt
+          "$ADB" shell getprop ro.product.cpu.abi | tee emulator-abi.txt
           grep -q 'arm64-v8a' emulator-abi.txt
-          adb shell getprop ro.build.version.sdk
+          "$ADB" shell getprop ro.build.version.sdk
 
       - name: Upload diagnostics
         if: always()

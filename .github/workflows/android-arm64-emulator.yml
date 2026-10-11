@@ -1,6 +1,13 @@
 name: ARM64 Android emulator smoke test
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-arm64-emulator.yml'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       api_level:

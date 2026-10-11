@@ -117,8 +117,17 @@ jobs:
           AVDMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f | sort | tail -n 1)"
           EMULATOR="$ANDROID_HOME/emulator/emulator"
           ADB="$ANDROID_HOME/platform-tools/adb"
-          if ! echo "no" | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2 2>&1 | tee diagnostics/avd-create.log; then
-            echo 'AVD creation failed.' >&2
+          # Use the same explicit AVD directory for creation and launch.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          if ! printf 'no\n' | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2 2>&1 | tee diagnostics/avd-create.log; then
+            echo 'AVD creation command failed.' >&2
+            exit 1
+          fi
+          if [ ! -s "$ANDROID_AVD_HOME/ci_arm64.ini" ] || [ ! -d "$ANDROID_AVD_HOME/ci_arm64.avd" ]; then
+            echo "AVD creation did not produce expected files under $ANDROID_AVD_HOME." | tee diagnostics/avd-create-result.txt >&2
+            find "$HOME/.android" -maxdepth 4 \( -type f -name 'ci_arm64.ini' -o -type d -name 'ci_arm64.avd' \) -print 2>&1 | tee diagnostics/avd-locations.txt >&2 || true
+            cat diagnostics/avd-create.log >&2 || true
             exit 1
           fi
           "$EMULATOR" -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > diagnostics/emulator.log 2>&1 &

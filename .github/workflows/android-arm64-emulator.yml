@@ -34,12 +34,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Prepare diagnostic files
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p diagnostics
-          : > diagnostics/emulator.log
-          : > diagnostics/emulator-abi.txt
-          : > diagnostics/emulator-properties.txt
-          : > diagnostics/host-dependencies.txt
+          for f in emulator.log emulator-abi.txt emulator-properties.txt host-dependencies.txt; do : > "diagnostics/$f"; done
           {
             echo "runner_os=$RUNNER_OS"
             echo "runner_arch=$RUNNER_ARCH"
@@ -48,12 +47,24 @@ jobs:
             date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
           } > diagnostics/run-info.txt
 
-      - name: Install host dependency for Android Emulator
+      - name: Install PulseAudio runtime library
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libpulse0t64
+          # Ubuntu package naming differs across releases/mirror metadata. Select an
+          # actually available package providing the PulseAudio runtime library.
+          if apt-cache show libpulse0t64 >/dev/null 2>&1; then
+            PULSE_PACKAGE=libpulse0t64
+          elif apt-cache show libpulse0 >/dev/null 2>&1; then
+            PULSE_PACKAGE=libpulse0
+          else
+            echo 'Neither libpulse0t64 nor libpulse0 is available from configured apt repositories.' >&2
+            apt-cache search '^libpulse0' | tee diagnostics/pulse-package-search.txt >&2 || true
+            exit 1
+          fi
+          echo "pulse_package=$PULSE_PACKAGE" | tee diagnostics/pulse-package.txt
+          sudo apt-get install -y "$PULSE_PACKAGE"
           ldconfig -p | grep 'libpulse.so.0' | tee diagnostics/pulse-library.txt
 
       - uses: actions/setup-java@v4
@@ -86,12 +97,13 @@ jobs:
           QEMU="$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64"
           if [ -x "$QEMU" ]; then
             ldd "$QEMU" | tee diagnostics/host-dependencies.txt
-            if ldd "$QEMU" | grep -q 'not found'; then
+            if grep -q 'not found' diagnostics/host-dependencies.txt; then
               echo 'QEMU has unresolved shared-library dependencies.' >&2
               exit 1
             fi
           else
             echo "QEMU binary not found at expected path: $QEMU" | tee diagnostics/host-dependencies.txt
+            exit 1
           fi
           "$ANDROID_HOME/emulator/emulator" -version 2>&1 | tee diagnostics/emulator-version.txt
           "$ANDROID_HOME/platform-tools/adb" version 2>&1 | tee diagnostics/adb-version.txt
@@ -115,7 +127,7 @@ jobs:
           booted=0
           while [ "$SECONDS" -lt "$deadline" ]; do
             if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
-              echo 'Emulator process exited before boot completed.' >&2
+              echo 'Emulator process exited before boot completed.' | tee diagnostics/boot-result.txt >&2
               break
             fi
             if "$ADB" shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; then booted=1; break; fi

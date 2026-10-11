@@ -33,6 +33,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare diagnostic files
+        run: |
+          mkdir -p diagnostics
+          : > diagnostics/emulator.log
+          : > diagnostics/emulator-abi.txt
+          : > diagnostics/emulator-properties.txt
+          : > diagnostics/host-dependencies.txt
+          {
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "api_level=$API_LEVEL"
+            echo "boot_timeout=$BOOT_TIMEOUT"
+            date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
+          } > diagnostics/run-info.txt
+
+      - name: Install host dependency for Android Emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libpulse0t64
+          ldconfig -p | grep 'libpulse.so.0' | tee diagnostics/pulse-library.txt
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -45,7 +68,9 @@ jobs:
         run: python3 scripts/accept_android_licenses.py
 
       - name: Install SDK and ARM64 image
+        shell: bash
         run: |
+          set -euo pipefail
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-$API_LEVEL" \
@@ -57,43 +82,63 @@ jobs:
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/emulator/emulator"
-          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" || find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f -print
           test -d "$ANDROID_HOME/system-images/android-$API_LEVEL/google_apis/arm64-v8a"
+          QEMU="$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64"
+          if [ -x "$QEMU" ]; then
+            ldd "$QEMU" | tee diagnostics/host-dependencies.txt
+            if ldd "$QEMU" | grep -q 'not found'; then
+              echo 'QEMU has unresolved shared-library dependencies.' >&2
+              exit 1
+            fi
+          else
+            echo "QEMU binary not found at expected path: $QEMU" | tee diagnostics/host-dependencies.txt
+          fi
+          "$ANDROID_HOME/emulator/emulator" -version 2>&1 | tee diagnostics/emulator-version.txt
+          "$ANDROID_HOME/platform-tools/adb" version 2>&1 | tee diagnostics/adb-version.txt
 
       - name: Create and boot ARM64 emulator
         shell: bash
         run: |
-          set -o pipefail
+          set -uo pipefail
           AVDMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f | sort | tail -n 1)"
           EMULATOR="$ANDROID_HOME/emulator/emulator"
           ADB="$ANDROID_HOME/platform-tools/adb"
-          test -x "$AVDMANAGER"
-          test -x "$EMULATOR"
-          echo "no" | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2
-          "$EMULATOR" -version
-          ("$EMULATOR" -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > emulator.log 2>&1 &)
-          "$ADB" start-server
+          if ! echo "no" | "$AVDMANAGER" create avd --force --name ci_arm64 --package "system-images;android-$API_LEVEL;google_apis;arm64-v8a" --device pixel_2 2>&1 | tee diagnostics/avd-create.log; then
+            echo 'AVD creation failed.' >&2
+            exit 1
+          fi
+          "$EMULATOR" -avd ci_arm64 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > diagnostics/emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "$EMULATOR_PID" > diagnostics/emulator.pid
+          "$ADB" start-server 2>&1 | tee diagnostics/adb-start.log
           deadline=$((SECONDS + BOOT_TIMEOUT))
           booted=0
           while [ "$SECONDS" -lt "$deadline" ]; do
+            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+              echo 'Emulator process exited before boot completed.' >&2
+              break
+            fi
             if "$ADB" shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; then booted=1; break; fi
             sleep 5
           done
           if [ "$booted" -ne 1 ]; then
-            cat emulator.log || true
-            echo "ARM64 emulator failed to boot on this runner." >&2
+            echo 'ARM64 emulator failed to boot on this runner.' | tee diagnostics/boot-result.txt >&2
+            "$ADB" devices -l > diagnostics/adb-devices.txt 2>&1 || true
+            cat diagnostics/emulator.log || true
             exit 1
           fi
-          "$ADB" shell getprop ro.product.cpu.abi | tee emulator-abi.txt
-          grep -q 'arm64-v8a' emulator-abi.txt
-          "$ADB" shell getprop ro.build.version.sdk
+          echo 'boot_completed=1' | tee diagnostics/boot-result.txt
+          "$ADB" shell getprop ro.product.cpu.abi | tee diagnostics/emulator-abi.txt
+          grep -q 'arm64-v8a' diagnostics/emulator-abi.txt
+          "$ADB" shell getprop ro.build.version.sdk | tee diagnostics/emulator-sdk.txt
+          "$ADB" shell getprop > diagnostics/emulator-properties.txt
+          "$ADB" devices -l > diagnostics/adb-devices.txt
 
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: arm64-emulator-diagnostics
-          path: |
-            emulator.log
-            emulator-abi.txt
-          if-no-files-found: ignore
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 14

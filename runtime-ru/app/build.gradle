@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ru.mihealthresearch.runtime.ru'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'ru.mihealthresearch.runtime.ru'
+        minSdk 26
+        targetSdk 28
+        versionCode 1
+        versionName '0.1.0-alpha'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // This key signs only the companion module APK, never Xiaomi's target APK.
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+}

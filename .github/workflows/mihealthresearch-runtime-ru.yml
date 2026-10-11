@@ -1,0 +1,51 @@
+name: Mi Health Research RU runtime overlay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime-ru/**'
+      - 'tools/verify_runtime_module.py'
+      - '.github/workflows/mihealthresearch-runtime-ru.yml'
+      - 'docs/FORENSIC_ANALYSIS.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime-overlay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK platform
+        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Verify source and translations
+        run: python3 tools/verify_runtime_module.py
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build LSPosed module APK
+        run: gradle --no-daemon --stacktrace -p runtime-ru assembleRelease
+
+      - name: Verify generated APK exists
+        run: test -s runtime-ru/app/build/outputs/apk/release/app-release.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mihealthresearch-runtime-ru-lsposed
+          path: runtime-ru/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14

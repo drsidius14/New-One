@@ -1,0 +1,93 @@
+name: Mi Health consent resource audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/mi-health-consent-audit.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  consent-resource-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Download immutable APK reference assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p input/original input/russian
+          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'mi-fitness-3.59.1.apk' --dir input/original
+          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" \
+            --pattern 'mi-health-research-1.4.6-original.apk' --dir input/original
+          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" \
+            --name mi-health-research-1.4.6-ru-patched-apk --dir input/russian
+          echo '--- SHA-256 ---' | tee audit-summary.txt
+          sha256sum input/original/*.apk input/russian/*.apk | tee -a audit-summary.txt
+          test "$(sha256sum input/original/mi-fitness-3.59.1.apk | awk '{print $1}')" = \
+            '46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254'
+          test "$(sha256sum input/original/mi-health-research-1.4.6-original.apk | awk '{print $1}')" = \
+            '9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc'
+          test "$(sha256sum input/russian/*.apk | awk '{print $1}')" = \
+            'eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb'
+      - name: Obtain JADX and decode APK resources and code
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o jadx.zip https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip
+          mkdir jadx && unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+          mkdir -p decoded/fitness decoded/original decoded/russian
+          jadx/bin/jadx --no-res -d decoded/fitness input/original/mi-fitness-3.59.1.apk > /tmp/jadx-fitness.log 2>&1 || { tail -100 /tmp/jadx-fitness.log; exit 1; }
+          jadx/bin/jadx -d decoded/original input/original/mi-health-research-1.4.6-original.apk > /tmp/jadx-original.log 2>&1 || { tail -100 /tmp/jadx-original.log; exit 1; }
+          RUSSIAN_APK="$(find input/russian -type f -name '*.apk' -print -quit)"
+          jadx/bin/jadx -d decoded/russian "$RUSSIAN_APK" > /tmp/jadx-russian.log 2>&1 || { tail -100 /tmp/jadx-russian.log; exit 1; }
+      - name: Compare consent and integration references
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics/consent-audit
+          {
+            echo '# Mi Health Research consent/resource audit'
+            echo "Generated UTC: $(date -u +%FT%TZ)"
+            echo
+            echo '## APK SHA-256'
+            cat audit-summary.txt
+            echo
+            echo '## Chinese consent text candidates in decoded resources'
+            grep -RInaE '同意|隐私|用户协议|个人信息|授权|不同意|继续|开始使用|服务协议|隐私政策' \
+              decoded/original decoded/russian --include='*.xml' --include='*.json' --include='*.html' --include='*.txt' \
+              | head -250 || true
+            echo
+            echo '## Consent-related resource filenames'
+            find decoded/original decoded/russian -type f \
+              | grep -Ei '/(res|resources)/.*(string|consent|privacy|agreement|policy|welcome|guide|protocol)' \
+              | head -250 || true
+            echo
+            echo '## Locale/resource directory inventory'
+            find decoded/original decoded/russian -type d \
+              | grep -E '/res/values(-[^/]+)?$' | sort | head -250 || true
+            echo
+            echo '## Integration symbols — originals vs Russian candidate'
+            for token in 'DefaultRemoteService' 'mi.intent.action.DEFAULT' 'DEFAULT_READ_DATA' 'DEFAULT_WRITE_DATA' 'DataContentProvider' 'DeviceProvider' 'ResearchDataReceiver' 'ResearchApp' 'hlth.research.xiaomiwear.com'; do
+              echo "### $token"
+              printf 'original: '; grep -RIlF "$token" decoded/original/sources 2>/dev/null | wc -l
+              printf 'russian:  '; grep -RIlF "$token" decoded/russian/sources 2>/dev/null | wc -l
+              grep -RInF "$token" decoded/original/sources decoded/russian/sources 2>/dev/null | head -12 || true
+            done
+          } > diagnostics/consent-audit/REPORT.md
+          cp audit-summary.txt diagnostics/consent-audit/
+          echo 'Audit report created.'
+          sed -n '1,240p' diagnostics/consent-audit/REPORT.md
+      - name: Upload audit report and decoded-resource excerpts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-health-consent-resource-audit
+          path: |
+            diagnostics/consent-audit/
+            /tmp/jadx-*.log
+          if-no-files-found: error
+          retention-days: 14

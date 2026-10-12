@@ -1,0 +1,234 @@
+name: Mi Health Research original vs Russian runtime comparison
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mi-health-runtime-comparison.yml'
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: Android API level for the x86_64 emulator
+        required: true
+        default: '35'
+      boot_timeout:
+        description: Emulator boot timeout in seconds
+        required: true
+        default: '900'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mi-health-runtime-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      API_LEVEL: ${{ inputs.api_level || '35' }}
+      BOOT_TIMEOUT: ${{ inputs.boot_timeout || '900' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics/original diagnostics/russian test-apk
+          {
+            echo "workflow_run_id=$GITHUB_RUN_ID"
+            echo "commit=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "api_level=$API_LEVEL"
+            date -u '+started_utc=%Y-%m-%dT%H:%M:%SZ'
+          } > diagnostics/run-info.txt
+          echo '9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc  app/base/小米健康研究_1.4.6.apk' | sha256sum --check - | tee diagnostics/original/source-apk-sha256.txt
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          if apt-cache show libpulse0t64 >/dev/null 2>&1; then PULSE=libpulse0t64; else PULSE=libpulse0; fi
+          sudo apt-get install -y "$PULSE" jq
+          ldconfig -p | grep 'libpulse.so.0' | tee diagnostics/pulse-library.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK and x86_64 image
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            'platform-tools' \
+            "platforms;android-$API_LEVEL" \
+            'build-tools;35.0.0' \
+            'emulator' \
+            "system-images;android-$API_LEVEL;google_apis;x86_64"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          export LD_LIBRARY_PATH="$ANDROID_HOME/emulator/lib64:$ANDROID_HOME/emulator/lib64/qt/lib:$ANDROID_HOME/emulator/lib64/qt/plugins${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          ldd "$ANDROID_HOME/emulator/qemu/linux-x86_64/qemu-system-x86_64" | tee diagnostics/host-dependencies.txt
+          ! grep -q 'not found' diagnostics/host-dependencies.txt
+          "$ANDROID_HOME/emulator/emulator" -version 2>&1 | tee diagnostics/emulator-version.txt
+          "$ANDROID_HOME/platform-tools/adb" version 2>&1 | tee diagnostics/adb-version.txt
+
+      - name: Create and boot emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          AVDMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name avdmanager -type f | sort | tail -n 1)"
+          printf 'no\n' | "$AVDMANAGER" create avd --force --name mi_health_ci --package "system-images;android-$API_LEVEL;google_apis;x86_64" --device pixel_2 2>&1 | tee diagnostics/avd-create.log
+          {
+            if [ -e /dev/kvm ]; then ls -l /dev/kvm; else echo '/dev/kvm absent'; fi
+            id
+          } > diagnostics/kvm-status.txt 2>&1
+          if [ ! -e /dev/kvm ]; then echo 'KVM unavailable; refusing software-only emulator run.' >&2; exit 1; fi
+          sudo chmod 666 /dev/kvm || true
+          test -r /dev/kvm && test -w /dev/kvm
+          "$ANDROID_HOME/emulator/emulator" -avd mi_health_ci -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > diagnostics/emulator.log 2>&1 &
+          echo $! > diagnostics/emulator.pid
+          adb start-server
+          deadline=$((SECONDS + BOOT_TIMEOUT))
+          until adb shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then adb devices -l > diagnostics/adb-devices.txt; cat diagnostics/emulator.log; exit 1; fi
+            sleep 5
+          done
+          adb shell getprop ro.product.cpu.abi | tee diagnostics/emulator-abi.txt
+          grep -q x86_64 diagnostics/emulator-abi.txt
+          adb shell getprop ro.build.version.sdk | tee diagnostics/emulator-sdk.txt
+          adb devices -l > diagnostics/adb-devices.txt
+
+      - name: Obtain latest successful Russian APK artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Search recent successful builds; avoid hard-coded, stale run IDs.
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mi-health-research-ru-patch.yml/runs?status=success&per_page=20" > diagnostics/recent-build-runs.json
+          mapfile -t RUN_IDS < <(jq -r '.workflow_runs[] | select(.head_branch == "main") | .id' diagnostics/recent-build-runs.json)
+          FOUND=0
+          for RUN_ID in "${RUN_IDS[@]}"; do
+            rm -rf test-apk/*
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name mi-health-research-1.4.6-ru-patched-apk --dir test-apk >"diagnostics/download-$RUN_ID.log" 2>&1; then
+              echo "selected_build_run_id=$RUN_ID" | tee diagnostics/selected-build.txt
+              FOUND=1
+              break
+            fi
+          done
+          if [ "$FOUND" -ne 1 ]; then
+            echo 'No recent successful run with the expected Russian APK artifact was found.' | tee diagnostics/artifact-download-error.txt >&2
+            cat diagnostics/recent-build-runs.json >&2
+            exit 1
+          fi
+          mapfile -t APKS < <(find test-apk -type f -name '*.apk' -print)
+          if [ "${#APKS[@]}" -ne 1 ]; then printf 'Expected exactly one APK, found %s\n' "${#APKS[@]}" >&2; find test-apk -type f -print; exit 1; fi
+          cp "${APKS[0]}" test-apk/MiHealthResearch-Russian.apk
+          sha256sum test-apk/MiHealthResearch-Russian.apk | tee diagnostics/russian/source-apk-sha256.txt
+
+      - name: Verify package identity and run original baseline
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL='app/base/小米健康研究_1.4.6.apk'
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$ORIGINAL" > diagnostics/original/aapt-badging.txt
+          grep -q "package: name='com.mi.healthresearch'" diagnostics/original/aapt-badging.txt
+          "$ADB" install "$ORIGINAL" 2>&1 | tee diagnostics/original/install.txt
+          "$ADB" shell pm path com.mi.healthresearch | tee diagnostics/original/installed-path.txt
+          "$ADB" shell dumpsys package com.mi.healthresearch > diagnostics/original/package-dump.txt
+          "$ADB" logcat -c
+          set +e
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/original/launch.txt 2>&1
+          RC=$?
+          set -e
+          echo "monkey_exit=$RC" >> diagnostics/original/launch.txt
+          sleep 25
+          "$ADB" shell dumpsys activity activities > diagnostics/original/activities.txt 2>&1 || true
+          "$ADB" shell dumpsys activity exit-info com.mi.healthresearch > diagnostics/original/exit-info.txt 2>&1 || true
+          "$ADB" logcat -d -v threadtime > diagnostics/original/logcat-full.txt
+          grep -Ei 'AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|com\.mi\.healthresearch|DefaultRemoteService|ResearchData' diagnostics/original/logcat-full.txt > diagnostics/original/logcat-relevant.txt || true
+          "$ADB" shell screencap -p /sdcard/mi-health-original.png
+          "$ADB" pull /sdcard/mi-health-original.png diagnostics/original/screenshot.png >/dev/null
+          "$ADB" uninstall com.mi.healthresearch
+          if [ "$RC" -ne 0 ] || grep -Eq 'FATAL EXCEPTION|Process: com\.mi\.healthresearch' diagnostics/original/logcat-relevant.txt; then echo 'baseline_status=FAIL' | tee diagnostics/original/status.txt; exit 1; fi
+          echo 'baseline_status=PASS' | tee diagnostics/original/status.txt
+
+      - name: Install and run Russian build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          # Different signing certificates require sequential installs; remove baseline first.
+          "$ADB" uninstall com.mi.healthresearch >/dev/null 2>&1 || true
+          RUSSIAN='test-apk/MiHealthResearch-Russian.apk'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$RUSSIAN" > diagnostics/russian/aapt-badging.txt
+          grep -q "package: name='com.mi.healthresearch'" diagnostics/russian/aapt-badging.txt
+          grep -E "versionCode=|versionName=" diagnostics/russian/aapt-badging.txt | tee diagnostics/russian/version.txt
+          "$ADB" install "$RUSSIAN" 2>&1 | tee diagnostics/russian/install.txt
+          "$ADB" shell pm path com.mi.healthresearch | tee diagnostics/russian/installed-path.txt
+          "$ADB" shell dumpsys package com.mi.healthresearch > diagnostics/russian/package-dump.txt
+          "$ADB" logcat -c
+          set +e
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/russian/launch.txt 2>&1
+          RC=$?
+          set -e
+          echo "monkey_exit=$RC" >> diagnostics/russian/launch.txt
+          sleep 25
+          "$ADB" shell dumpsys activity activities > diagnostics/russian/activities.txt 2>&1 || true
+          "$ADB" shell dumpsys activity exit-info com.mi.healthresearch > diagnostics/russian/exit-info.txt 2>&1 || true
+          "$ADB" logcat -d -v threadtime > diagnostics/russian/logcat-full.txt
+          grep -Ei 'AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|com\.mi\.healthresearch|DefaultRemoteService|ResearchData' diagnostics/russian/logcat-full.txt > diagnostics/russian/logcat-relevant.txt || true
+          "$ADB" shell screencap -p /sdcard/mi-health-russian.png
+          "$ADB" pull /sdcard/mi-health-russian.png diagnostics/russian/screenshot.png >/dev/null
+          if [ "$RC" -ne 0 ] || grep -Eq 'FATAL EXCEPTION|Process: com\.mi\.healthresearch' diagnostics/russian/logcat-relevant.txt; then echo 'russian_status=FAIL' | tee diagnostics/russian/status.txt; exit 1; fi
+          echo 'russian_status=PASS' | tee diagnostics/russian/status.txt
+          {
+            echo 'emulator_install_and_launch=PASS'
+            echo 'original_vs_russian=both_launch_checked'
+            echo 'mi_fitness_inter_app_integration=NOT_TESTED'
+            echo 'bluetooth_wearable_integration=NOT_TESTED'
+            echo 'reason=Mi Fitness APK and physical wearable are not part of this repository workflow; emulator smoke test cannot prove those integrations.'
+          } | tee diagnostics/FINAL_STATUS.txt
+
+      - name: Evaluate both runtime results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL_STATUS=unknown
+          RUSSIAN_STATUS=unknown
+          [ ! -f diagnostics/original/status.txt ] || ORIGINAL_STATUS="$(cut -d= -f2 diagnostics/original/status.txt)"
+          [ ! -f diagnostics/russian/status.txt ] || RUSSIAN_STATUS="$(cut -d= -f2 diagnostics/russian/status.txt)"
+          {
+            echo "original_status=$ORIGINAL_STATUS"
+            echo "russian_status=$RUSSIAN_STATUS"
+            echo 'mi_fitness_integration=NOT_TESTED'
+            echo 'bluetooth_wearable_integration=NOT_TESTED'
+          } | tee diagnostics/evaluation.txt
+          [ "$ORIGINAL_STATUS" = PASS ] && [ "$RUSSIAN_STATUS" = PASS ]
+
+      - name: Upload diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-health-runtime-comparison-diagnostics
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 14

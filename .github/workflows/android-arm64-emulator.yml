@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   x86_64-emulator:
@@ -183,6 +184,62 @@ jobs:
           "$ADB" shell getprop ro.build.version.sdk | tee diagnostics/emulator-sdk.txt
           "$ADB" shell getprop > diagnostics/emulator-properties.txt
           "$ADB" devices -l > diagnostics/adb-devices.txt
+
+      - name: Install and launch Russian Mi Health Research APK
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          mkdir -p test-apk diagnostics/runtime
+          # Fetch the already-built APK artifact; do not rebuild or modify the APK.
+          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" \
+            --name mi-health-research-1.4.6-ru-patched-apk --dir test-apk
+          APK="$(find test-apk -type f -name '*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo 'Expected APK was not found in the existing build artifact.' | tee diagnostics/runtime/install-result.txt >&2
+            find test-apk -maxdepth 3 -type f -print | tee diagnostics/runtime/artifact-files.txt >&2 || true
+            exit 1
+          fi
+          ACTUAL_APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          echo "$ACTUAL_APK_SHA  $APK" | tee diagnostics/runtime/apk-sha256.txt
+          EXPECTED_APK_SHA="eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb"
+          if [ "$ACTUAL_APK_SHA" != "$EXPECTED_APK_SHA" ]; then
+            echo "APK SHA-256 mismatch: expected $EXPECTED_APK_SHA, got $ACTUAL_APK_SHA" | tee diagnostics/runtime/apk-integrity.txt >&2
+            exit 1
+          fi
+          echo 'apk_sha256_verified=true' | tee diagnostics/runtime/apk-integrity.txt
+          "$ADB" install -r "$APK" 2>&1 | tee diagnostics/runtime/install-result.txt
+          "$ADB" shell pm path com.mi.healthresearch | tee diagnostics/runtime/installed-package-path.txt
+          "$ADB" shell dumpsys package com.mi.healthresearch > diagnostics/runtime/research-package.txt
+          "$ADB" shell pm list packages | grep -E 'com\.mi\.health(research)?$' | tee diagnostics/runtime/mi-packages.txt || true
+          # This run intentionally records the research app's baseline behavior.
+          # Mi Fitness is not present in the repository artifact and is NOT installed here.
+          "$ADB" logcat -c
+          set +e
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/runtime/launch-result.txt 2>&1
+          LAUNCH_STATUS=$?
+          set -e
+          echo "monkey_exit=$LAUNCH_STATUS" >> diagnostics/runtime/launch-result.txt
+          sleep 30
+          "$ADB" shell dumpsys activity activities > diagnostics/runtime/activities.txt 2>&1 || true
+          "$ADB" shell dumpsys activity exit-info com.mi.healthresearch > diagnostics/runtime/exit-info.txt 2>&1 || true
+          "$ADB" logcat -d -v threadtime > diagnostics/runtime/logcat-full.txt
+          grep -Ei 'mi\.healthresearch|AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|DefaultRemoteService|ResearchData|mi\.intent\.action\.DEFAULT|com\.mi\.health' diagnostics/runtime/logcat-full.txt > diagnostics/runtime/logcat-relevant.txt || true
+          "$ADB" shell screencap -p /sdcard/mi-health-research.png
+          "$ADB" pull /sdcard/mi-health-research.png diagnostics/runtime/mi-health-research.png >/dev/null
+          {
+            echo 'integration_status=NOT_TESTED'
+            echo 'reason=Mi Fitness APK is not available to this workflow; only the already-built Russian Research APK was installed.'
+            echo "launch_exit=$LAUNCH_STATUS"
+          } | tee diagnostics/runtime/test-summary.txt
+          if [ "$LAUNCH_STATUS" -ne 0 ] || grep -Eq 'FATAL EXCEPTION|Process: com\.mi\.healthresearch' diagnostics/runtime/logcat-relevant.txt; then
+            echo 'runtime_status=FAIL' | tee -a diagnostics/runtime/test-summary.txt
+            exit 1
+          fi
+          echo 'runtime_status=PASS' | tee -a diagnostics/runtime/test-summary.txt
 
       - name: Upload diagnostics
         if: always()

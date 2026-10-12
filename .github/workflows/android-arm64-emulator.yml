@@ -8,6 +8,7 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'docs/**'
+      - 'test-assets/originals/**'
   workflow_dispatch:
     inputs:
       api_level:
@@ -185,7 +186,7 @@ jobs:
           "$ADB" shell getprop > diagnostics/emulator-properties.txt
           "$ADB" devices -l > diagnostics/adb-devices.txt
 
-      - name: Install and launch Russian Mi Health Research APK
+      - name: Install original Mi Fitness and compare Research variants
         if: success()
         shell: bash
         env:
@@ -193,52 +194,59 @@ jobs:
         run: |
           set -euo pipefail
           ADB="$ANDROID_HOME/platform-tools/adb"
-          mkdir -p test-apk diagnostics/runtime
-          # Fetch the already-built APK artifact; do not rebuild or modify the APK.
-          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" \
-            --name mi-health-research-1.4.6-ru-patched-apk --dir test-apk
-          APK="$(find test-apk -type f -name '*.apk' -print -quit)"
-          if [ -z "$APK" ]; then
-            echo 'Expected APK was not found in the existing build artifact.' | tee diagnostics/runtime/install-result.txt >&2
-            find test-apk -maxdepth 3 -type f -print | tee diagnostics/runtime/artifact-files.txt >&2 || true
-            exit 1
-          fi
-          ACTUAL_APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"
-          echo "$ACTUAL_APK_SHA  $APK" | tee diagnostics/runtime/apk-sha256.txt
-          EXPECTED_APK_SHA="eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb"
-          if [ "$ACTUAL_APK_SHA" != "$EXPECTED_APK_SHA" ]; then
-            echo "APK SHA-256 mismatch: expected $EXPECTED_APK_SHA, got $ACTUAL_APK_SHA" | tee diagnostics/runtime/apk-integrity.txt >&2
-            exit 1
-          fi
-          echo 'apk_sha256_verified=true' | tee diagnostics/runtime/apk-integrity.txt
-          "$ADB" install -r "$APK" 2>&1 | tee diagnostics/runtime/install-result.txt
-          "$ADB" shell pm path com.mi.healthresearch | tee diagnostics/runtime/installed-package-path.txt
-          "$ADB" shell dumpsys package com.mi.healthresearch > diagnostics/runtime/research-package.txt
-          "$ADB" shell pm list packages | grep -E 'com\.mi\.health(research)?$' | tee diagnostics/runtime/mi-packages.txt || true
-          # This run intentionally records the research app's baseline behavior.
-          # Mi Fitness is not present in the repository artifact and is NOT installed here.
+          mkdir -p test-apk diagnostics/runtime/baseline-original diagnostics/runtime/candidate-russian
+          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.apk' --dir test-apk
+          FITNESS_APK="test-apk/mi-fitness-3.59.1.apk"
+          ORIGINAL_RESEARCH="test-apk/mi-health-research-1.4.6-original.apk"
+          test -s "$FITNESS_APK" || { echo 'Mi Fitness release asset missing' >&2; exit 1; }
+          test -s "$ORIGINAL_RESEARCH" || { echo 'Original Research release asset missing' >&2; exit 1; }
+          FITNESS_SHA="$(sha256sum "$FITNESS_APK" | awk '{print $1}')"
+          echo "$FITNESS_SHA  test-apk/mi-fitness-3.59.1.apk" | tee diagnostics/runtime/mi-fitness-sha256.txt
+          test "$FITNESS_SHA" = "46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254" || { echo 'Mi Fitness SHA-256 mismatch' >&2; exit 1; }
+          ORIG_SHA="$(sha256sum "$ORIGINAL_RESEARCH" | awk '{print $1}')"
+          echo "$ORIG_SHA  $ORIGINAL_RESEARCH" | tee diagnostics/runtime/original-research-sha256.txt
+          test "$ORIG_SHA" = "9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc" || { echo 'Original Research SHA-256 mismatch' >&2; exit 1; }
+          "$ADB" install -r "$FITNESS_APK" 2>&1 | tee diagnostics/runtime/mi-fitness-install.txt
+          "$ADB" shell pm path com.mi.health | tee diagnostics/runtime/mi-fitness-package-path.txt
+          "$ADB" shell dumpsys package com.mi.health > diagnostics/runtime/mi-fitness-package.txt
+          "$ADB" shell pm clear com.mi.health >/dev/null 2>&1 || true
+          "$ADB" install -r "$ORIGINAL_RESEARCH" 2>&1 | tee diagnostics/runtime/baseline-original/install.txt
           "$ADB" logcat -c
           set +e
-          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/runtime/launch-result.txt 2>&1
-          LAUNCH_STATUS=$?
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/runtime/baseline-original/launch.txt 2>&1
+          BASELINE_STATUS=$?
           set -e
-          echo "monkey_exit=$LAUNCH_STATUS" >> diagnostics/runtime/launch-result.txt
-          sleep 30
-          "$ADB" shell dumpsys activity activities > diagnostics/runtime/activities.txt 2>&1 || true
-          "$ADB" shell dumpsys activity exit-info com.mi.healthresearch > diagnostics/runtime/exit-info.txt 2>&1 || true
-          "$ADB" logcat -d -v threadtime > diagnostics/runtime/logcat-full.txt
-          grep -Ei 'mi\.healthresearch|AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|DefaultRemoteService|ResearchData|mi\.intent\.action\.DEFAULT|com\.mi\.health' diagnostics/runtime/logcat-full.txt > diagnostics/runtime/logcat-relevant.txt || true
-          "$ADB" shell screencap -p /sdcard/mi-health-research.png
-          "$ADB" pull /sdcard/mi-health-research.png diagnostics/runtime/mi-health-research.png >/dev/null
-          {
-            echo 'integration_status=NOT_TESTED'
-            echo 'reason=Mi Fitness APK is not available to this workflow; only the already-built Russian Research APK was installed.'
-            echo "launch_exit=$LAUNCH_STATUS"
-          } | tee diagnostics/runtime/test-summary.txt
-          if [ "$LAUNCH_STATUS" -ne 0 ] || grep -Eq 'FATAL EXCEPTION|Process: com\.mi\.healthresearch' diagnostics/runtime/logcat-relevant.txt; then
-            echo 'runtime_status=FAIL' | tee -a diagnostics/runtime/test-summary.txt
-            exit 1
-          fi
+          echo "monkey_exit=$BASELINE_STATUS" >> diagnostics/runtime/baseline-original/launch.txt
+          sleep 25
+          "$ADB" shell dumpsys activity activities > diagnostics/runtime/baseline-original/activities.txt 2>&1 || true
+          "$ADB" logcat -d -v threadtime > diagnostics/runtime/baseline-original/logcat-full.txt
+          grep -Ei 'mi\.healthresearch|AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|DefaultRemoteService|ResearchData|mi\.intent\.action\.DEFAULT|com\.mi\.health' diagnostics/runtime/baseline-original/logcat-full.txt > diagnostics/runtime/baseline-original/logcat-relevant.txt || true
+          "$ADB" shell screencap -p /sdcard/research-original.png
+          "$ADB" pull /sdcard/research-original.png diagnostics/runtime/baseline-original/screenshot.png >/dev/null
+          "$ADB" uninstall com.mi.healthresearch 2>&1 | tee diagnostics/runtime/candidate-russian/uninstall-original.txt
+          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" --name mi-health-research-1.4.6-ru-patched-apk --dir test-apk
+          PATCHED_APK="$(find test-apk -type f -name '*.apk' ! -name 'mi-fitness-3.59.1.apk' ! -name 'mi-health-research-1.4.6-original.apk' -print -quit)"
+          test -n "$PATCHED_APK" || { echo 'Russian Research APK missing from build artifact' >&2; exit 1; }
+          PATCHED_SHA="$(sha256sum "$PATCHED_APK" | awk '{print $1}')"
+          echo "$PATCHED_SHA  $PATCHED_APK" | tee diagnostics/runtime/candidate-russian/apk-sha256.txt
+          test "$PATCHED_SHA" = "eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb" || { echo 'Russian Research SHA-256 mismatch' >&2; exit 1; }
+          "$ADB" shell pm clear com.mi.health >/dev/null 2>&1 || true
+          "$ADB" install -r "$PATCHED_APK" 2>&1 | tee diagnostics/runtime/candidate-russian/install.txt
+          "$ADB" logcat -c
+          set +e
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/runtime/candidate-russian/launch.txt 2>&1
+          CANDIDATE_STATUS=$?
+          set -e
+          echo "monkey_exit=$CANDIDATE_STATUS" >> diagnostics/runtime/candidate-russian/launch.txt
+          sleep 25
+          "$ADB" shell dumpsys activity activities > diagnostics/runtime/candidate-russian/activities.txt 2>&1 || true
+          "$ADB" logcat -d -v threadtime > diagnostics/runtime/candidate-russian/logcat-full.txt
+          grep -Ei 'mi\.healthresearch|AndroidRuntime|FATAL EXCEPTION|SecurityException|Permission Denial|DefaultRemoteService|ResearchData|mi\.intent\.action\.DEFAULT|com\.mi\.health' diagnostics/runtime/candidate-russian/logcat-full.txt > diagnostics/runtime/candidate-russian/logcat-relevant.txt || true
+          "$ADB" shell screencap -p /sdcard/research-russian.png
+          "$ADB" pull /sdcard/research-russian.png diagnostics/runtime/candidate-russian/screenshot.png >/dev/null
+          { echo 'mi_fitness_installed=true'; echo "baseline_original_research_launch_exit=$BASELINE_STATUS"; echo "candidate_russian_research_launch_exit=$CANDIDATE_STATUS"; echo 'integration_status=SMOKE_TEST_ONLY'; echo 'note=Both Research variants launched with Mi Fitness installed; this does not prove every cross-app flow works.'; } | tee diagnostics/runtime/test-summary.txt
+          if [ "$BASELINE_STATUS" -ne 0 ] || [ "$CANDIDATE_STATUS" -ne 0 ] || grep -Eq 'FATAL EXCEPTION|Process: com\.mi\.healthresearch' diagnostics/runtime/baseline-original/logcat-relevant.txt diagnostics/runtime/candidate-russian/logcat-relevant.txt; then echo 'runtime_status=FAIL' | tee -a diagnostics/runtime/test-summary.txt; exit 1; fi
           echo 'runtime_status=PASS' | tee -a diagnostics/runtime/test-summary.txt
 
       - name: Upload diagnostics

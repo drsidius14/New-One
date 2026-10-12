@@ -1,0 +1,233 @@
+Mi Health phone cleanup inventory
+Generated: 2026-10-12T13:26:18+03:00
+Termux HOME: /data/data/com.termux/files/home
+
+=== Candidate directories ===
+
+PATH: /data/data/com.termux/files/home/MiHealth_unpack_work
+71M	/data/data/com.termux/files/home/MiHealth_unpack_work
+FILES (max depth 4; capped at 1000):
+.github/workflows/deep_test.yml | 10121 bytes
+.github/workflows/finalize.yml | 8188 bytes
+.github/workflows/full_recovery_archive.yml | 8654 bytes
+.github/workflows/v10.5.yml | 3920 bytes
+.github/workflows/v10.6.yml | 6563 bytes
+.github/workflows/v10.7.yml | 8771 bytes
+.github/workflows/v11.yml | 18600 bytes
+.github/workflows/v12.yml | 19569 bytes
+.github/workflows/v13.yml | 28211 bytes
+.github/workflows/v16_handoff_archive.yml | 5362 bytes
+README.md | 392 bytes
+README_GITHUB_BUILD.md | 545 bytes
+REPAIR_README.txt | 629 bytes
+V10.5_README.txt | 539 bytes
+V10.6_README.txt | 1381 bytes
+V10.7_FIX_README.txt | 2200 bytes
+V11_README.txt | 5077 bytes
+V11_TERMUX_COMMAND.txt | 1125 bytes
+V12_README.txt | 6384 bytes
+V13_LOG_REVIEW.txt | 3178 bytes
+V13_README.txt | 3142 bytes
+V13_TERMUX_COMMAND.txt | 1179 bytes
+V14_CHANGELOG.txt | 942 bytes
+V14_README.txt | 3768 bytes
+V14_TERMUX_COMMAND.txt | 925 bytes
+V15_CHANGELOG.txt | 1028 bytes
+V15_README.txt | 500 bytes
+V16_CHANGELOG.txt | 3282 bytes
+V16_FAILURE_ANALYSIS.txt | 4876 bytes
+V16_README.txt | 2043 bytes
+V16_REPAIR_REPORT_RU.txt | 8058 bytes
+V16_TERMUX_COMMAND.txt | 823 bytes
+_recovery/README_RECOVERY_RU.md | 647 bytes
+_recovery/actions_artifacts/artifact-index.json | 7879 bytes
+_recovery/actions_artifacts/workflow-runs.json | 436044 bytes
+_recovery/git/Mihealthreserch-all-refs.bundle | 29288808 bytes
+_recovery/git/Mihealthreserch-v16-handoff.tar.gz | 20093410 bytes
+_recovery/meta/branches.txt | 1044 bytes
+_recovery/meta/build-info.json | 181 bytes
+_recovery/meta/cross-links.txt | 2645 bytes
+_recovery/meta/file-inventory.json | 13118 bytes
+_recovery/meta/file-inventory.txt | 9315 bytes
+_recovery/meta/git-log-all.txt | 8971 bytes
+_recovery/meta/index-files.txt | 6675 bytes
+_recovery/meta/lfs-files.txt | 0 bytes
+_recovery/meta/remote-refs.txt | 732 bytes
+_recovery/meta/show-ref.txt | 849 bytes
+_recovery/meta/submodules.txt | 0 bytes
+_recovery/meta/tags.txt | 0 bytes
+_recovery/meta/tracked-files.txt | 2275 bytes
+_recovery/meta/v16-commit.txt | 41 bytes
+_recovery/sha256-manifest.txt | 1902 bytes
+input/xiaomi_health_research_ru_candidate_v5.apk | 21507603 bytes
+repair/reference_local_v10_7.json | 1544172 bytes
+repair/repair_dex.py | 6169 bytes
+repair/repair_v8.py | 16069 bytes
+repair/v10_5_analyze.py | 6137 bytes
+repair/v10_5_localize.py | 7029 bytes
+repair/v10_5_package.py | 1825 bytes
+repair/v10_5_verify.py | 2623 bytes
+repair/v10_6_analyze.py | 6137 bytes
+repair/v10_6_localize.py | 8204 bytes
+repair/v10_6_package.py | 4075 bytes
+repair/v10_6_verify.py | 5135 bytes
+repair/v10_7_package.py | 7367 bytes
+repair/v10_7_verify.py | 6155 bytes
+repair/v11_compare_decoded_tree.py | 3180 bytes
+repair/v11_compare_forensic_reports.py | 2289 bytes
+repair/v11_compare_resource_tables.py | 4657 bytes
+repair/v11_coverage.py | 2147 bytes
+repair/v11_dex_cjk_audit.py | 1253 bytes
+repair/v11_forensic.py | 10004 bytes
+repair/v11_localize.py | 16428 bytes
+repair/v11_package.py | 7332 bytes
+repair/v11_translations.json | 152456 bytes
+repair/v11_ui_probe.py | 2071 bytes
+repair/v11_verify.py | 6432 bytes
+repair/v12_compare_decoded_tree.py | 3180 bytes
+repair/v12_compare_forensic_reports.py | 2289 bytes
+repair/v12_compare_resource_tables.py | 5163 bytes
+repair/v12_coverage.py | 2147 bytes
+repair/v12_dex_cjk_audit.py | 1253 bytes
+repair/v12_forensic.py | 10004 bytes
+repair/v12_localize.py | 17339 bytes
+repair/v12_package.py | 7332 bytes
+repair/v12_selftest.py | 1350 bytes
+repair/v12_translations.json | 152479 bytes
+repair/v12_ui_probe.py | 2642 bytes
+repair/v12_verify.py | 6432 bytes
+repair/v13_compare_decoded_tree.py | 3180 bytes
+repair/v13_compare_forensic_reports.py | 2289 bytes
+repair/v13_compare_resource_tables.py | 5201 bytes
+repair/v13_compare_smali.py | 7983 bytes
+repair/v13_coverage.py | 3384 bytes
+repair/v13_dex_cjk_audit.py | 1253 bytes
+repair/v13_dex_translations.json | 3422 bytes
+repair/v13_extract_critical_sources.py | 1692 bytes
+repair/v13_forensic.py | 10004 bytes
+repair/v13_localize.py | 25636 bytes
+repair/v13_localize_smali.py | 9880 bytes
+repair/v13_package.py | 7621 bytes
+repair/v13_restore_attribute_formats.py | 4475 bytes
+repair/v13_selftest.py | 23737 bytes
+repair/v13_translations.json | 152479 bytes
+repair/v13_ui_probe.py | 3899 bytes
+repair/v13_validate_ru_resource_dirs.py | 2317 bytes
+repair/v13_verify.py | 9198 bytes
+repair/verify_final.py | 1212 bytes
+
+PATH: /data/data/com.termux/files/home/MI_HEALTH_RELEASE_PATCH
+165M	/data/data/com.termux/files/home/MI_HEALTH_RELEASE_PATCH
+FILES (max depth 4; capped at 1000):
+MI_HEALTH_LFS_RUNTIME_PATCH/.github/workflows/android-arm64-emulator.yml | 14553 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/README.md | 1242 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/SHA256SUMS.txt | 590 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/TERMUX_COMMANDS.md | 695 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-fitness-3.59.1.apk | 150579113 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-health-research-1.4.6-original.apk | 21494149 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/upload_patch.sh | 2206 bytes
+
+PATH: /data/data/com.termux/files/home/MI_HEALTH_RUNTIME_COMPARE_PATCH
+165M	/data/data/com.termux/files/home/MI_HEALTH_RUNTIME_COMPARE_PATCH
+FILES (max depth 4; capped at 1000):
+MI_HEALTH_LFS_RUNTIME_PATCH/.github/workflows/android-arm64-emulator.yml | 14328 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/README.md | 676 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/SHA256SUMS.txt | 948 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/TERMUX_COMMANDS.md | 279 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-fitness-3.59.1.apk.part00 | 50000000 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-fitness-3.59.1.apk.part01 | 50000000 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-fitness-3.59.1.apk.part02 | 50000000 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-fitness-3.59.1.apk.part03 | 579113 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/test-assets/originals/mi-health-research-1.4.6-original.apk | 21494149 bytes
+MI_HEALTH_LFS_RUNTIME_PATCH/upload_patch.sh | 3196 bytes
+
+PATH: /data/data/com.termux/files/home/mi_health_cleanup_tool
+16K	/data/data/com.termux/files/home/mi_health_cleanup_tool
+FILES (max depth 4; capped at 1000):
+README.txt | 1680 bytes
+mi_health_cleanup.sh | 5450 bytes
+
+=== HOME top-level entries (storage excluded) ===
+d .android
+d .cache
+d .config
+d .github
+d .gradle
+d .local
+d .mifitness-patchlab-launch
+d .ssh
+d .studio
+d .termux
+d MI_HEALTH_KVM_FIX_PATCH
+d MI_HEALTH_RELEASE_PATCH
+d MI_HEALTH_RUNTIME_COMPARE_PATCH
+d MI_HEALTH_RUNTIME_TEST_PATCH
+d MI_HEALTH_X86_64_EMULATOR_PATCH
+d MiHealthResearch_FULL_HANDOFF_20261009_151550
+d MiHealthResearch_FULL_HANDOFF_20261009_151627
+d MiHealthResearch_FULL_HANDOFF_20261009_152848
+d MiHealthResearch_V17_1_20261009T162057Z
+d MiHealthResearch_V17_20261009T160916Z
+d MiHealthResearch_recovery_stage
+d MiHealth_unpack_work
+d Mihealthreserch_FINAL_v4
+d Mihealthreserch_FINAL_v5
+d Mihealthreserch_GITHUB_v7
+d Mihealthreserch_V8
+d Mihealthreserch_old_20261008_202834
+d New-One-fix-20261011-100810
+d New-One-import-20261011-100106
+d New-One-toolchain-tmp
+d android-sdk
+d gradle-9.5.1
+d mi-health-diag
+d mi-health-fix
+d mi-health-fix-v2
+d mi-health-fix-v3
+d mi-health-fix-v4
+d mi_health_cleanup_tool
+d mi_health_transfer_tool
+d mihealth_resource_fix_v2
+d repair
+d tmp_mi_health_first_package
+d tmp_mi_health_first_package_bundle
+d tmp_mi_health_integration_audit
+d v13-coverage-fix
+d v13-coverage-fix-v2
+d v14-final-fix
+d v14-recovery-backup
+d v15-final-fix
+d v16-final-fix-20261009150031-20397
+d v16-repair-20261009165312-21271
+d v17-export
+d v17_01_patch
+d v17_02_patch
+f .bash_history
+f .bashrc
+f .git-credentials
+f .gitconfig
+f .lesshst
+f .wget-hsts
+f MiHealthResearch_FULL_HANDOFF_20261009_152848.zip
+f MiHealthResearch_FULL_HANDOFF_20261009_152848.zip.sha256
+f MiHealthResearch_full_recovery_archive_v2.sh
+f V13_LOG_REVIEW.txt
+f V13_README.txt
+f V13_TERMUX_COMMAND.txt
+f collect_mihealthresearch_handoff.sh
+f create_new_one.sh
+f deploy_v10_7.sh
+f github_migration_20261011_083519.log
+f github_migration_and_cleanup.sh
+f gradle-9.5.1-bin.zip
+f gradle-9.5.1-bin.zip.1
+f phone_residue_audit.sh
+f phone_residue_audit_20261011_083712.txt
+f phone_residue_check.sh
+f phone_residue_check_20261011_083857.txt
+f publish_mihealthresearch_v16.sh
+f termux_studio.py
+f v17_repo_diagnostic.txt
+
+=== Safety ===
+No source files deleted. No GitHub changes performed.

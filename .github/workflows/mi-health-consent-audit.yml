@@ -15,79 +15,118 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Download immutable APK reference assets
+      - name: Download and verify immutable APK reference assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p input/original input/russian
-          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" \
-            --pattern 'mi-fitness-3.59.1.apk' --dir input/original
-          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" \
-            --pattern 'mi-health-research-1.4.6-original.apk' --dir input/original
-          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" \
-            --name mi-health-research-1.4.6-ru-patched-apk --dir input/russian
-          echo '--- SHA-256 ---' | tee audit-summary.txt
-          sha256sum input/original/*.apk input/russian/*.apk | tee -a audit-summary.txt
-          test "$(sha256sum input/original/mi-fitness-3.59.1.apk | awk '{print $1}')" = \
-            '46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254'
-          test "$(sha256sum input/original/mi-health-research-1.4.6-original.apk | awk '{print $1}')" = \
-            '9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc'
-          test "$(sha256sum input/russian/*.apk | awk '{print $1}')" = \
-            'eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb'
-      - name: Obtain JADX and decode APK resources and code
+          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" --pattern 'mi-fitness-3.59.1.apk' --dir input/original
+          gh release download runtime-test-assets-v1 --repo "$GITHUB_REPOSITORY" --pattern 'mi-health-research-1.4.6-original.apk' --dir input/original
+          gh run download 38162628347 --repo "$GITHUB_REPOSITORY" --name mi-health-research-1.4.6-ru-patched-apk --dir input/russian
+          FITNESS=input/original/mi-fitness-3.59.1.apk
+          ORIGINAL=input/original/mi-health-research-1.4.6-original.apk
+          RUSSIAN="$(find input/russian -type f -name '*.apk' -print -quit)"
+          test -s "$FITNESS" && test -s "$ORIGINAL" && test -n "$RUSSIAN" && test -s "$RUSSIAN"
+          sha256sum "$FITNESS" "$ORIGINAL" "$RUSSIAN" | tee apk-sha256.txt
+          test "$(sha256sum "$FITNESS" | awk '{print $1}')" = '46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254'
+          test "$(sha256sum "$ORIGINAL" | awk '{print $1}')" = '9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc'
+          test "$(sha256sum "$RUSSIAN" | awk '{print $1}')" = 'eb4fccd0058d6cab8508052b4666e6bfb8715d8b2f2adb67959c10eecae89bdb'
+      - name: Install resource decoder
         run: |
           set -euo pipefail
-          curl -fL --retry 3 -o jadx.zip https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip
-          mkdir jadx && unzip -q jadx.zip -d jadx
-          chmod +x jadx/bin/jadx
-          mkdir -p decoded/fitness decoded/original decoded/russian
-          jadx/bin/jadx --no-res -d decoded/fitness input/original/mi-fitness-3.59.1.apk > /tmp/jadx-fitness.log 2>&1 || { tail -100 /tmp/jadx-fitness.log; exit 1; }
-          jadx/bin/jadx -d decoded/original input/original/mi-health-research-1.4.6-original.apk > /tmp/jadx-original.log 2>&1 || { tail -100 /tmp/jadx-original.log; exit 1; }
-          RUSSIAN_APK="$(find input/russian -type f -name '*.apk' -print -quit)"
-          jadx/bin/jadx -d decoded/russian "$RUSSIAN_APK" > /tmp/jadx-russian.log 2>&1 || { tail -100 /tmp/jadx-russian.log; exit 1; }
-      - name: Compare consent and integration references
+          sudo apt-get update
+          sudo apt-get install -y apktool
+          apktool --version
+      - name: Decode resources without decompiling application code
+        run: |
+          set -u
+          mkdir -p decoded/fitness decoded/original decoded/russian diagnostics/consent-audit
+          decode_one() {
+            label="$1"; apk="$2"; out="$3"
+            echo "=== apktool decode: $label ==="
+            if apktool d -f -s "$apk" -o "$out" >"diagnostics/consent-audit/apktool-$label.log" 2>&1; then
+              echo "RESOURCE_DECODE_OK $label" | tee -a diagnostics/consent-audit/decode-status.txt
+            else
+              rc=$?
+              echo "RESOURCE_DECODE_FAILED $label exit=$rc" | tee -a diagnostics/consent-audit/decode-status.txt
+              tail -80 "diagnostics/consent-audit/apktool-$label.log" || true
+            fi
+          }
+          decode_one fitness input/original/mi-fitness-3.59.1.apk decoded/fitness
+          decode_one original input/original/mi-health-research-1.4.6-original.apk decoded/original
+          RUSSIAN="$(find input/russian -type f -name '*.apk' -print -quit)"
+          decode_one russian "$RUSSIAN" decoded/russian
+          # A resource audit can still produce a useful report when a decoder
+          # rejects one APK; retain the diagnostics rather than aborting early.
+          test -d decoded/original && test -d decoded/russian
+      - name: Compare consent resources and integration identifiers
         run: |
           set -euo pipefail
-          mkdir -p diagnostics/consent-audit
-          {
-            echo '# Mi Health Research consent/resource audit'
-            echo "Generated UTC: $(date -u +%FT%TZ)"
-            echo
-            echo '## APK SHA-256'
-            cat audit-summary.txt
-            echo
-            echo '## Chinese consent text candidates in decoded resources'
-            grep -RInaE '同意|隐私|用户协议|个人信息|授权|不同意|继续|开始使用|服务协议|隐私政策' \
-              decoded/original decoded/russian --include='*.xml' --include='*.json' --include='*.html' --include='*.txt' \
-              | head -250 || true
-            echo
-            echo '## Consent-related resource filenames'
-            find decoded/original decoded/russian -type f \
-              | grep -Ei '/(res|resources)/.*(string|consent|privacy|agreement|policy|welcome|guide|protocol)' \
-              | head -250 || true
-            echo
-            echo '## Locale/resource directory inventory'
-            find decoded/original decoded/russian -type d \
-              | grep -E '/res/values(-[^/]+)?$' | sort | head -250 || true
-            echo
-            echo '## Integration symbols — originals vs Russian candidate'
-            for token in 'DefaultRemoteService' 'mi.intent.action.DEFAULT' 'DEFAULT_READ_DATA' 'DEFAULT_WRITE_DATA' 'DataContentProvider' 'DeviceProvider' 'ResearchDataReceiver' 'ResearchApp' 'hlth.research.xiaomiwear.com'; do
-              echo "### $token"
-              printf 'original: '; grep -RIlF "$token" decoded/original/sources 2>/dev/null | wc -l
-              printf 'russian:  '; grep -RIlF "$token" decoded/russian/sources 2>/dev/null | wc -l
-              grep -RInF "$token" decoded/original/sources decoded/russian/sources 2>/dev/null | head -12 || true
-            done
-          } > diagnostics/consent-audit/REPORT.md
-          cp audit-summary.txt diagnostics/consent-audit/
-          echo 'Audit report created.'
-          sed -n '1,240p' diagnostics/consent-audit/REPORT.md
-      - name: Upload audit report and decoded-resource excerpts
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, zipfile
+          root=Path('.')
+          out=Path('diagnostics/consent-audit/REPORT.md')
+          consent=re.compile(r'同意|隐私|用户协议|个人信息|授权|不同意|继续|开始使用|服务协议|隐私政策|consent|privacy|agreement|policy',re.I)
+          tokens=['DefaultRemoteService','mi.intent.action.DEFAULT','DEFAULT_READ_DATA','DEFAULT_WRITE_DATA','DataContentProvider','DeviceProvider','ResearchDataReceiver','ResearchApp','hlth.research.xiaomiwear.com']
+          apks={'fitness':Path('input/original/mi-fitness-3.59.1.apk'),'original':Path('input/original/mi-health-research-1.4.6-original.apk'),'russian':next(Path('input/russian').glob('*.apk'))}
+          lines=['# Mi Health Research — аудит ресурсов согласия и интеграций','', '## SHA-256','']
+          lines += [x for x in Path('apk-sha256.txt').read_text(errors='replace').splitlines()]
+          lines += ['', '## Результат декодирования ресурсов','']
+          status=Path('diagnostics/consent-audit/decode-status.txt')
+          lines += status.read_text(errors='replace').splitlines() if status.exists() else ['Нет статуса декодирования.']
+          lines += ['', '## Кандидаты текстов согласия и конфиденциальности','']
+          for label in ('original','russian'):
+            lines += [f'### {label}']
+            base=Path('decoded')/label
+            found=0
+            if base.exists():
+              for p in base.rglob('*'):
+                if p.is_file() and p.suffix.lower() in ('.xml','.json','.html','.txt','.arsc'):
+                  try: data=p.read_text(errors='ignore')
+                  except Exception: continue
+                  hits=[(i+1,s.strip()) for i,s in enumerate(data.splitlines()) if consent.search(s)]
+                  for n,s in hits[:150]: lines.append(f'- `{p}:{n}`: {s[:500]}'); found+=1
+                  if found>=250: break
+            if not found: lines.append('- Подходящие текстовые строки не найдены либо ресурсы не декодированы.')
+          lines += ['', '## Файлы ресурсов с релевантными именами','']
+          for label in ('original','russian'):
+            lines.append(f'### {label}')
+            base=Path('decoded')/label
+            files=[str(p) for p in base.rglob('*') if p.is_file() and re.search(r'string|consent|privacy|agreement|policy|welcome|guide|protocol',str(p),re.I)] if base.exists() else []
+            lines += [f'- `{p}`' for p in files[:200]] or ['- Нет результатов или каталог не декодирован.']
+          lines += ['', '## Статические строки интеграции из DEX','', 'Метод: извлечение печатных строк непосредственно из DEX внутри APK; JADX не используется, чтобы ошибки декомпиляции кода не блокировали аудит ресурсов.','']
+          dex_text={}
+          for label,apk in apks.items():
+            chunks=[]
+            try:
+              with zipfile.ZipFile(apk) as z:
+                for name in z.namelist():
+                  if re.fullmatch(r'classes(?:\d+)?\.dex',Path(name).name):
+                    raw=z.read(name)
+                    chunks += [m.decode('utf-8','ignore') for m in re.findall(rb'[\x20-\x7e]{5,}',raw)]
+                    chunks += [m.decode('utf-16le','ignore') for m in re.findall(rb'(?:[\x20-\x7e]\x00){5,}',raw)]
+            except Exception as e: chunks=[f'EXTRACTION_ERROR: {e}']
+            dex_text[label]='\n'.join(chunks)
+          for token in tokens:
+            lines.append(f'### `{token}`')
+            for label in ('fitness','original','russian'):
+              count=dex_text[label].count(token)
+              lines.append(f'- {label}: {count} совпадений в извлечённых строках DEX')
+              samples=[s for s in dex_text[label].splitlines() if token in s][:5]
+              lines += [f'  - `{s[:300]}`' for s in samples]
+          lines += ['', '## Ограничения интерпретации','', '- Это статический аудит ресурсов и строк; он не доказывает фактический обмен данными во время выполнения.', '- Отсутствие совпадения в печатных строках DEX не доказывает отсутствие интеграции: строки могут быть собраны динамически или зашифрованы.', '- Если apktool не смог декодировать APK, его журнал приложен к артефакту.', '- Никакие APK этим workflow не изменяются и не пересобираются.','']
+          out.write_text('\n'.join(lines),encoding='utf-8')
+          print(out.read_text()[:18000])
+          PY
+      - name: Upload audit report and diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mi-health-consent-resource-audit
           path: |
             diagnostics/consent-audit/
-            /tmp/jadx-*.log
-          if-no-files-found: error
+            apk-sha256.txt
+          if-no-files-found: warn
           retention-days: 14

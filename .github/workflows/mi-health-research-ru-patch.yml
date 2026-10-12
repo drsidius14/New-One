@@ -45,6 +45,14 @@ jobs:
           python3 -m unittest discover -s tests -v
           python3 scripts/validate_patch.py --project-root .
 
+      - name: Verify stable project signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.MI_HEALTH_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MI_HEALTH_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo 'Missing Actions secret MI_HEALTH_KEYSTORE_BASE64; run scripts/bootstrap_signing_secrets.sh from the supplied ZIP.'; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo 'Missing Actions secret MI_HEALTH_KEYSTORE_PASSWORD; run scripts/bootstrap_signing_secrets.sh from the supplied ZIP.'; exit 1; }
+
       - name: Install pinned Apktool 3.0.3
         run: |
           mkdir -p .tools
@@ -60,6 +68,7 @@ jobs:
           java -jar .tools/apktool.jar d -f \
             'app/base/小米健康研究_1.4.6.apk' \
             -o work/decoded
+          python3 scripts/snapshot_decoded.py --decoded-dir work/decoded --output work/decoded-before-patch.json
 
       - name: Extract translation catalogs
         run: |
@@ -68,7 +77,9 @@ jobs:
 
       - name: Apply Russian patches
         id: patch
-        run: python3 scripts/apply_patch.py --project-root . --decoded-dir work/decoded
+        run: |
+          python3 scripts/apply_patch.py --project-root . --decoded-dir work/decoded
+          python3 scripts/audit_decoded_patch.py --decoded-dir work/decoded --snapshot work/decoded-before-patch.json
 
       - name: Accept Android SDK licenses
         if: steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0'
@@ -80,37 +91,49 @@ jobs:
           sdkmanager --install 'platform-tools' 'build-tools;36.0.0'
           test -x "$ANDROID_HOME/build-tools/36.0.0/zipalign"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
           echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
 
-      - name: Build, align and sign patched APK
+      - name: Build, align, sign with stable project key and audit APK
         if: (steps.patch.outputs.resource_count != '0' || steps.patch.outputs.asset_override_count != '0') && success()
         env:
           DECODED: work/decoded
+          KEYSTORE_B64: ${{ secrets.MI_HEALTH_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MI_HEALTH_KEYSTORE_PASSWORD }}
         run: |
+          set +x
           mkdir -p work/release
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mi-health-project.jks"
+          chmod 600 "$RUNNER_TEMP/mi-health-project.jks"
           java -jar .tools/apktool.jar b "$DECODED" -o work/release/MiHealthResearch-1.4.6-unsigned.apk
           zipalign -f -v 4 work/release/MiHealthResearch-1.4.6-unsigned.apk work/release/MiHealthResearch-1.4.6-aligned.apk
-          PASS="$(openssl rand -hex 16)"
-          keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/mi-health-ci.jks" \
-            -storepass "$PASS" -keypass "$PASS" -alias ci-test-key -keyalg RSA -keysize 2048 \
-            -validity 10000 -dname 'CN=Mi Health Research Russian Patch CI,O=Local Test Build'
-          apksigner sign --ks "$RUNNER_TEMP/mi-health-ci.jks" --ks-key-alias ci-test-key \
-            --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
+          apksigner sign --ks "$RUNNER_TEMP/mi-health-project.jks" --ks-key-alias mi-health-project \
+            --ks-pass "env:KEYSTORE_PASSWORD" --key-pass "env:KEYSTORE_PASSWORD" \
             --out work/release/MiHealthResearch-1.4.6-ru-patched.apk \
             work/release/MiHealthResearch-1.4.6-aligned.apk
-          apksigner verify --verbose --print-certs work/release/MiHealthResearch-1.4.6-ru-patched.apk
+          apksigner verify --verbose --print-certs work/release/MiHealthResearch-1.4.6-ru-patched.apk | tee work/release/signature-audit.txt
+          aapt dump badging 'app/base/小米健康研究_1.4.6.apk' > work/release/base-badging.txt
+          aapt dump badging work/release/MiHealthResearch-1.4.6-ru-patched.apk > work/release/patched-badging.txt
+          grep -E "^(package:|uses-permission:)" work/release/base-badging.txt > work/release/base-identity-permissions.txt
+          grep -E "^(package:|uses-permission:)" work/release/patched-badging.txt > work/release/patched-identity-permissions.txt
+          diff -u work/release/base-identity-permissions.txt work/release/patched-identity-permissions.txt
           sha256sum 'app/base/小米健康研究_1.4.6.apk' | tee work/release/base-apk-sha256.txt
-          rm -f "$RUNNER_TEMP/mi-health-ci.jks"
+          sha256sum work/release/MiHealthResearch-1.4.6-ru-patched.apk | tee work/release/patched-apk-sha256.txt
+          rm -f "$RUNNER_TEMP/mi-health-project.jks"
 
       - name: Upload resource catalog and audit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mi-health-research-1.4.6-ru-catalog
+          name: mi-health-research-1.4.6-ru-catalog-and-audit
           path: |
             work/catalog/**
             work/decoded/apktool.yml
-            work/release/base-apk-sha256.txt
+            work/release/*audit.txt
+            work/release/*badging.txt
+            work/release/*identity-permissions.txt
+            work/release/*sha256.txt
+            work/decoded-before-patch.json
           if-no-files-found: ignore
           retention-days: 14
 

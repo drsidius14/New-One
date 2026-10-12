@@ -1,0 +1,222 @@
+name: Mi Health integration root-cause diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: Android API level
+        required: true
+        default: '35'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mi-health-integration-diagnostics.yml'
+      - 'scripts/mi_health_integration_diagnostics.sh'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mi-health-integration-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration-diagnostics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      API_LEVEL: ${{ inputs.api_level || '35' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install pinned analysis tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tools diagnostics/{original,russian,companion,static}
+          curl --fail --location --retry 3 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar \
+            -o .tools/apktool.jar
+          echo 'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  .tools/apktool.jar' | sha256sum --check -
+          curl --fail --location --retry 3 \
+            https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip \
+            -o .tools/jadx.zip
+          unzip -q .tools/jadx.zip -d .tools/jadx
+          sdkmanager --install "platform-tools" "platforms;android-${API_LEVEL}" "build-tools;35.0.0" "emulator" "system-images;android-${API_LEVEL};google_apis;x86_64"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          java -jar .tools/apktool.jar --version | tee diagnostics/static/apktool-version.txt
+          .tools/jadx/bin/jadx --version 2>&1 | tee diagnostics/static/jadx-version.txt
+      - name: Fetch latest successful Russian APK build artifact automatically
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mi-health-research-ru-patch.yml/runs?status=success&per_page=20" > diagnostics/static/recent-russian-build-runs.json
+          mapfile -t RUN_IDS < <(jq -r '.workflow_runs[] | select(.head_branch == "main") | .id' diagnostics/static/recent-russian-build-runs.json)
+          FOUND=0
+          for RUN_ID in "${RUN_IDS[@]}"; do
+            rm -rf artifacts/*
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name mi-health-research-1.4.6-ru-patched-apk --dir artifacts >"diagnostics/static/russian-artifact-download-$RUN_ID.log" 2>&1; then
+              echo "russian_build_run_id=$RUN_ID" | tee diagnostics/static/selected-russian-build.txt
+              FOUND=1
+              break
+            fi
+          done
+          if [ "$FOUND" -ne 1 ]; then
+            echo 'Russian APK artifact not found in latest successful build runs.' | tee diagnostics/static/russian-artifact-status.txt
+          fi
+      - name: Verify immutable original and locate companion APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL='app/base/小米健康研究_1.4.6.apk'
+          echo '9e872f2d75e4ec1d509216d8caa998c2957d797c57b8ecc1ed8c92054f53c4bc  app/base/小米健康研究_1.4.6.apk' | sha256sum --check -
+          aapt dump badging "$ORIGINAL" > diagnostics/original/badging.txt
+          aapt dump permissions "$ORIGINAL" > diagnostics/original/permissions.txt
+          apksigner verify --verbose --print-certs "$ORIGINAL" > diagnostics/original/signature.txt 2>&1
+          find app -type f -iname '*.apk' -print | sort > diagnostics/static/repository-apks.txt
+          python3 - <<'PY'
+          import pathlib, subprocess
+          out=pathlib.Path("diagnostics/static/apk-packages.txt")
+          rows=[]
+          for p in pathlib.Path("app").rglob("*.apk"):
+              r=subprocess.run(["aapt","dump","badging",str(p)],text=True,capture_output=True)
+              line=next((x for x in r.stdout.splitlines() if x.startswith("package:")), "PACKAGE_PARSE_FAILED")
+              rows.append(f"{p}\t{line}")
+          out.write_text("\n".join(rows)+"\n")
+          companions=[]
+          for row in rows:
+              if ("com.mi.health'" in row or "com.xiaomi.fitness" in row) and "小米健康研究_1.4.6.apk" not in row:
+                  companions.append(row.split("\t")[0])
+          pathlib.Path("diagnostics/static/companion-candidates.txt").write_text("\n".join(companions)+"\n")
+          print("companion_apk_count="+str(len(companions)))
+          PY
+      - name: Decompile original and Russian APKs for static integration diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL='app/base/小米健康研究_1.4.6.apk'
+          java -jar .tools/apktool.jar d -f "$ORIGINAL" -o work/original-apktool > diagnostics/static/apktool-original.log 2>&1
+          .tools/jadx/bin/jadx --no-res -d work/original-jadx "$ORIGINAL" > diagnostics/static/jadx-original.log 2>&1 || true
+          python3 - <<'PY'
+          import pathlib, subprocess
+          candidates=[]
+          for p in pathlib.Path("artifacts").rglob("*.apk") if pathlib.Path("artifacts").exists() else []:
+              r=subprocess.run(["aapt","dump","badging",str(p)],text=True,capture_output=True)
+              if "package: name='com.mi.healthresearch'" in r.stdout and p.name != "小米健康研究_1.4.6.apk":
+                  candidates.append(p)
+          for p in pathlib.Path("app").rglob("*.apk"):
+              if p.name != "小米健康研究_1.4.6.apk":
+                  r=subprocess.run(["aapt","dump","badging",str(p)],text=True,capture_output=True)
+                  if "package: name='com.mi.healthresearch'" in r.stdout: candidates.append(p)
+          candidates=list(dict.fromkeys(candidates))
+          pathlib.Path("diagnostics/static/russian-apk-candidates.txt").write_text("\n".join(map(str,candidates))+"\n")
+          if candidates:
+              p=candidates[-1]
+              subprocess.run(["aapt","dump","badging",str(p)],stdout=open("diagnostics/russian/badging.txt","w"),check=True)
+              subprocess.run(["aapt","dump","permissions",str(p)],stdout=open("diagnostics/russian/permissions.txt","w"),check=True)
+              subprocess.run(["apksigner","verify","--verbose","--print-certs",str(p)],stdout=open("diagnostics/russian/signature.txt","w"),stderr=subprocess.STDOUT)
+              subprocess.run(["java","-jar",".tools/apktool.jar","d","-f",str(p),"-o","work/russian-apktool"],stdout=open("diagnostics/static/apktool-russian.log","w"),stderr=subprocess.STDOUT,check=True)
+              subprocess.run([".tools/jadx/bin/jadx","--no-res","-d","work/russian-jadx",str(p)],stdout=open("diagnostics/static/jadx-russian.log","w"),stderr=subprocess.STDOUT)
+          else:
+              pathlib.Path("diagnostics/static/russian-apk-candidates.txt").write_text("NO_RUSSIAN_APK_FOUND_IN_REPOSITORY_OR_ARTIFACTS\n")
+          PY
+          python3 - <<'PY'
+          import pathlib,re
+          root=pathlib.Path("work")
+          out=pathlib.Path("diagnostics/static/integration-symbols.txt")
+          patterns=re.compile(r'DefaultRemoteService|mi\.intent\.action\.DEFAULT|ResearchDataReceiver|DataContentProvider|DeviceProvider|bindService|startService|bindIsolatedService|ContentResolver|transact\(|ServiceConnection|PackageManager|resolveService|queryIntentServices|com\.xiaomi\.fitness|hlth\.research\.xiaomiwear\.com|Signature|permission',re.I)
+          lines=[]
+          for tree in [root/"original-apktool",root/"russian-apktool",root/"original-jadx",root/"russian-jadx"]:
+              if not tree.exists(): continue
+              for p in tree.rglob("*"):
+                  if not p.is_file() or p.suffix.lower() not in {".xml",".smali",".java",".kt",".txt"}: continue
+                  try: data=p.read_text(errors="ignore")
+                  except Exception: continue
+                  for n,line in enumerate(data.splitlines(),1):
+                      if patterns.search(line): lines.append(f"{tree.name}/{p.relative_to(tree)}:{n}:{line.strip()[:500]}")
+          out.write_text("\n".join(lines)+"\n")
+          print("matched_integration_lines="+str(len(lines)))
+          PY
+      - name: Boot accelerated Android emulator
+        id: emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo 'KVM unavailable; runtime stage blocked' | tee diagnostics/runtime-blocked.txt
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sudo chmod 666 /dev/kvm || true
+          printf 'no\n' | avdmanager create avd --force --name mi_health_diag --package "system-images;android-${API_LEVEL};google_apis;x86_64" --device pixel_2
+          emulator -avd mi_health_diag -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > diagnostics/emulator.log 2>&1 &
+          echo $! > diagnostics/emulator.pid
+          adb start-server
+          deadline=$((SECONDS+900))
+          until adb shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$'; do
+            if [ "$SECONDS" -gt "$deadline" ]; then
+              echo 'EMULATOR_BOOT_TIMEOUT' > diagnostics/runtime-blocked.txt
+              echo 'ready=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          adb shell getprop ro.build.version.sdk > diagnostics/emulator-api.txt
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - name: Execute package and service-discovery probes
+        if: steps.emulator.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADB=adb
+          ORIGINAL='app/base/小米健康研究_1.4.6.apk'
+          "$ADB" install "$ORIGINAL" | tee diagnostics/original/install.txt
+          "$ADB" shell pm path com.mi.healthresearch > diagnostics/original/installed-path.txt
+          "$ADB" shell dumpsys package com.mi.healthresearch > diagnostics/original/package-dump.txt
+          "$ADB" shell cmd package query-services --brief -a mi.intent.action.DEFAULT > diagnostics/runtime-services-action.txt 2>&1 || true
+          "$ADB" shell dumpsys package queries > diagnostics/runtime-package-queries.txt 2>&1 || true
+          "$ADB" shell pm list packages -f > diagnostics/runtime-installed-packages.txt
+          "$ADB" logcat -c
+          "$ADB" shell monkey -p com.mi.healthresearch 1 > diagnostics/original/launch.txt 2>&1 || true
+          sleep 20
+          "$ADB" shell dumpsys activity services > diagnostics/runtime-services-after-launch.txt
+          "$ADB" logcat -d -v threadtime > diagnostics/runtime-logcat-original.txt
+          grep -Ei 'DefaultRemoteService|mi\.intent\.action\.DEFAULT|ResearchData|SecurityException|Permission Denial|not exported|Unable to start|bindService|com\.mi\.healthresearch|com\.xiaomi\.fitness|FATAL EXCEPTION|AndroidRuntime' diagnostics/runtime-logcat-original.txt > diagnostics/runtime-logcat-relevant.txt || true
+          COMPANION="$(head -n1 diagnostics/static/companion-candidates.txt || true)"
+          if [ -n "$COMPANION" ] && [ -f "$COMPANION" ]; then
+            "$ADB" install "$COMPANION" | tee diagnostics/companion/install.txt
+            "$ADB" shell dumpsys package com.mi.health > diagnostics/companion/package-dump.txt 2>&1 || true
+            "$ADB" shell cmd package query-services --brief -a mi.intent.action.DEFAULT > diagnostics/companion/services-action.txt 2>&1 || true
+            "$ADB" shell monkey -p com.mi.health 1 > diagnostics/companion/launch.txt 2>&1 || true
+            sleep 25
+            "$ADB" shell dumpsys activity services > diagnostics/companion/services-after-launch.txt
+            "$ADB" logcat -d -v threadtime > diagnostics/companion/logcat-full.txt
+            grep -Ei 'DefaultRemoteService|mi\.intent\.action\.DEFAULT|ResearchData|SecurityException|Permission Denial|not exported|Unable to start|bindService|com\.mi\.healthresearch|com\.mi\.health|FATAL EXCEPTION|AndroidRuntime' diagnostics/companion/logcat-full.txt > diagnostics/companion/logcat-relevant.txt || true
+            echo 'companion_runtime=EXECUTED' > diagnostics/companion/status.txt
+          else
+            echo 'companion_runtime=BLOCKED_MISSING_MIFITNESS_APK' | tee diagnostics/companion/status.txt
+          fi
+          {
+            echo 'original_static_analysis=COMPLETED'
+            if [ -f diagnostics/static/russian-apk-candidates.txt ] && ! grep -q '^NO_RUSSIAN_APK_FOUND' diagnostics/static/russian-apk-candidates.txt; then echo 'russian_static_analysis=COMPLETED'; else echo 'russian_static_analysis=BLOCKED_RUSSIAN_APK_NOT_IN_REPO'; fi
+            if [ -f diagnostics/companion/status.txt ] && grep -q EXECUTED diagnostics/companion/status.txt; then echo 'mifitness_emulator_probe=EXECUTED'; else echo 'mifitness_emulator_probe=BLOCKED_MISSING_COMPANION_APK'; fi
+            echo 'physical_wearable=NOT_TESTABLE_IN_GITHUB_HOSTED_EMULATOR'
+            echo 'interpretation=Evidence only; a service query or bind log does not prove successful application-level data exchange.'
+          } | tee diagnostics/FINAL_STATUS.txt
+      - name: Upload all diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-health-integration-root-cause-diagnostics
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 14

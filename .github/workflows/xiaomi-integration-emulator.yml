@@ -83,7 +83,9 @@ jobs:
           echo 'MI_FITNESS_SOURCE=https://github.com/drsidius14/New-One/releases/tag/runtime-test-assets-v1' > runtime-report/mi-fitness-source.txt
           stat -c 'MI_FITNESS_SIZE_BYTES=%s' app/integration/com.mi.health_3.59.1.apk >> runtime-report/mi-fitness-source.txt
       - name: Set up Android SDK tools
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

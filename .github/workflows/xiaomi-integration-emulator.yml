@@ -1,0 +1,111 @@
+name: Xiaomi original APK integration — Android emulator
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/base/**'
+      - 'app/integration/**'
+      - 'config/project.json'
+      - 'tests/integration/**'
+      - '.github/workflows/xiaomi-integration-emulator.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xiaomi-original-apk-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  static-contract:
+    name: Original APK identity and integration contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout New-One main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download pinned original Mi Fitness 3.59.1 from project release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/integration runtime-report
+          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 900 \
+            'https://github.com/drsidius14/New-One/releases/download/runtime-test-assets-v1/mi-fitness-3.59.1.apk' \
+            -o app/integration/com.mi.health_3.59.1.apk
+          echo '46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254  app/integration/com.mi.health_3.59.1.apk' | sha256sum --check -
+          echo 'MI_FITNESS_SOURCE=https://github.com/drsidius14/New-One/releases/tag/runtime-test-assets-v1' > runtime-report/mi-fitness-source.txt
+          stat -c 'MI_FITNESS_SIZE_BYTES=%s' app/integration/com.mi.health_3.59.1.apk >> runtime-report/mi-fitness-source.txt
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact original APKs and cross-app contracts
+        id: audit
+        continue-on-error: true
+        run: python tests/integration/verify_original_apks.py
+      - name: Upload static report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaomi-integration-static-report
+          path: runtime-report/**
+          if-no-files-found: warn
+      - name: Require both original APKs for a full integration pass
+        if: steps.audit.outcome != 'success'
+        run: |
+          echo 'Full integration gate did not pass. Read xiaomi-integration-static-report.'
+          exit 1
+
+  android-emulator:
+    name: Android 11 ARM64 emulator integration
+    needs: static-contract
+    if: always() && needs.static-contract.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Checkout New-One main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download pinned original Mi Fitness 3.59.1 from project release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/integration runtime-report
+          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 900 \
+            'https://github.com/drsidius14/New-One/releases/download/runtime-test-assets-v1/mi-fitness-3.59.1.apk' \
+            -o app/integration/com.mi.health_3.59.1.apk
+          echo '46100649d47000e8886d94cfbb34c18706e492a5d3aaa7f34cd4785841ffc254  app/integration/com.mi.health_3.59.1.apk' | sha256sum --check -
+          echo 'MI_FITNESS_SOURCE=https://github.com/drsidius14/New-One/releases/tag/runtime-test-assets-v1' > runtime-report/mi-fitness-source.txt
+          stat -c 'MI_FITNESS_SIZE_BYTES=%s' app/integration/com.mi.health_3.59.1.apk >> runtime-report/mi-fitness-source.txt
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Initialize runtime report directory
+        run: |
+          mkdir -p runtime-report
+          { echo "UTC_START=$(date -u +%FT%TZ)"; echo "RUN_ID=${{ github.run_id }}"; echo "RUN_ATTEMPT=${{ github.run_attempt }}"; } > runtime-report/workflow-context.txt
+      - name: Set up Android emulator and run two-app contract tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: arm64-v8a
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect
+          disable-animations: true
+          script: bash tests/integration/run_emulator_contract.sh
+      - name: Upload emulator logs, UI and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaomi-integration-android-emulator-report
+          path: runtime-report/**
+          if-no-files-found: warn
